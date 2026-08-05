@@ -1,0 +1,15 @@
+broker:
+  host: BROKER_PC_IP
+  port: 1883
+  keepalive: 60
+  # 인증이 필요한 경우 값 대신 환경 변수 이름을 사용합니다.
+  # username_env: MQTT_USERNAME
+  # password_env: MQTT_PASSWORD
+
+node:
+  id: A
+
+topics:
+  publish: nodes/{node_id}/data
+  subscribe: server/{node_id}/result
+  broadcast: server/all/command

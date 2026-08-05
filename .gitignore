@@ -23,6 +23,7 @@ __pycache__/
 .env
 *.pem
 *.key
+/configs/mqtt_config.yaml
 
 # VS Code
 .vscode/
