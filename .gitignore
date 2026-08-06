@@ -1,0 +1,33 @@
+# 가상환경
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Django
+db.sqlite3
+db.sqlite3-*
+/web/media/
+/web/staticfiles/
+
+# 환경변수 / 비밀값
+.env
+.env.*
+!.env.example
+
+# 로그
+*.log
+
+# 압축본 (전달용은 필요할 때 별도로 만든다)
+*.zip
+
+# 에디터/OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
