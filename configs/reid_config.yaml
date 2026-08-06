@@ -1,0 +1,38 @@
+model:
+  name: osnet_x0_25
+  file: models/person_reid_osnet_x0_25.onnx
+  format: onnx
+  opset: 17
+  input_name: images
+  output_name: embeddings
+  input_shape:
+  - batch
+  - 3
+  - 256
+  - 128
+  embedding_dimension: 512
+  dynamic_batch: true
+preprocess:
+  source_format: BGR
+  model_format: RGB
+  resize_width: 128
+  resize_height: 256
+  interpolation: bilinear
+  scale: 0.00392156862745098
+  mean:
+  - 0.485
+  - 0.456
+  - 0.406
+  std:
+  - 0.229
+  - 0.224
+  - 0.225
+  layout: NCHW
+  dtype: float32
+postprocess:
+  l2_normalized_inside_model: true
+  similarity_metric: cosine
+matching:
+  similarity_threshold: null
+  threshold_status: not_calibrated
+  threshold_note: C270 자체 촬영 데이터의 positive/negative 분포로 최종 보정할 것

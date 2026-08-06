@@ -1,0 +1,29 @@
+{
+  "tracker_to_reid": {
+    "required_fields": {
+      "camera_id": "string, 예: CAM_A",
+      "local_track_id": "integer",
+      "timestamp": "float, Unix time",
+      "event": "TRACK_STARTED | TRACK_UPDATED | TRACK_LOST | TRACK_ENDED",
+      "bbox_xyxy": "[x1, y1, x2, y2]",
+      "person_crop": "OpenCV BGR uint8 이미지"
+    }
+  },
+  "reid_output": {
+    "embedding": "float32[512]",
+    "l2_normalized": true
+  },
+  "global_id_manager": {
+    "input": [
+      "camera_id",
+      "local_track_id",
+      "timestamp",
+      "embedding"
+    ],
+    "output": [
+      "global_id",
+      "similarity",
+      "match_status"
+    ]
+  }
+}

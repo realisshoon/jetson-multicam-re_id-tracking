@@ -1,8 +1,15 @@
-# reid-admin-web
+# jetson-multicam-re_id-tracking — `reid-admin-web` 브랜치
 
-Multicam Re-ID 관리자 대시보드 (Django). `jetson-multicam-re_id-tracking`
-(Jetson 장비들)이 만들어내는 데이터를 받아서 보여주는 웹.
-**jetson 쪽 리포는 이 프로젝트에서 일절 수정하지 않는다.**
+이 브랜치는 `main`에서 파생됐고, `main`의 Jetson 추론 파이프라인
+(`src/`, `configs/`, `external/`, `tests/`, ...) 을 그대로 포함한 위에
+Django 관리 대시보드(`web/`)를 추가한 것이다.
+
+> Multi-camera person tracking with YOLO, ByteTrack, OSNet Re-ID, and Jetson
+> Orin Nano. (`main`의 원래 설명)
+
+**이 브랜치에서 jetson 쪽 코드(`src/`, `configs/`, `external/`, `tests/`)는
+수정하지 않는다.** `web/` 안의 Django 앱은 jetson 쪽이 이미 밖으로 내보내는
+MQTT(`cctv/entry` 등)와 MJPEG 스트림만 읽어서 보여준다.
 
 아키텍처와 데이터 흐름, 모델 필드, API 계획 등 자세한 내용은
 [`HANDOFF_TO_MAIN_SERVER.md`](HANDOFF_TO_MAIN_SERVER.md) 와
@@ -11,7 +18,9 @@ Multicam Re-ID 관리자 대시보드 (Django). `jetson-multicam-re_id-tracking`
 ## 구조
 
 ```
-reid-admin-web/
+jetson-multicam-re_id-tracking/  (이 브랜치)
+├─ src/  configs/  external/  tests/   ← main 에서 그대로 이어받은 jetson 코드
+├─ requirements.txt                    ← jetson 쪽 추론 의존성
 ├─ web/                       Django 프로젝트 루트
 │  ├─ manage.py
 │  ├─ config/                 settings / urls / asgi
@@ -45,6 +54,10 @@ cd web
 ..\.venv\Scripts\python manage.py migrate
 ..\.venv\Scripts\python manage.py createsuperuser
 ```
+
+(jetson 쪽 추론 파이프라인을 이 장비에서 같이 돌릴 필요가 있다면
+루트의 `requirements.txt` 도 별도로 설치. Django 대시보드만 쓸 거면
+`web/requirements-web.txt` 만으로 충분하다.)
 
 ## 환경변수
 
@@ -86,3 +99,6 @@ Linux/Mac 에서는 `web/run_dev.sh` 참고 (대시보드 프로세스만 해당
   Django` 로 확정되어 있고, 메인 서버 API 가 준비되면 `mqtt_worker.py` 를
   그 API 를 호출하는 클라이언트로 교체한다. 자세한 내용과 제안 API 스펙은
   [`HANDOFF_TO_MAIN_SERVER.md`](HANDOFF_TO_MAIN_SERVER.md) 참고.
+- 다른 feature 브랜치(`feature/journey-sqlite-e2e` 등)와의 통합은 별도
+  통합 브랜치를 만들어서 진행할 예정 — 이 브랜치를 `main`에 직접
+  머지하지 않는다.

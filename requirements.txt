@@ -1,0 +1,30 @@
+# CCTV Multi-Camera Tracking MVP
+# Target: NVIDIA Jetson Orin Nano / Python 3.10
+#
+# IMPORTANT:
+# The following Jetson-specific components must already be installed
+# and are intentionally NOT installed from this file:
+#
+#   torch==2.3.0
+#   torchvision==0.18.0a0+6043bc2
+#   cv2/OpenCV==4.11.0
+#   TensorRT==10.3.0
+#   CUDA / JetPack
+#
+# Installing generic PyPI builds of torch, torchvision, or OpenCV may
+# replace the Jetson-optimized environment and break CUDA/GStreamer support.
+
+# Numerical arrays and preprocessing
+numpy==1.26.4
+
+# YOLO26 object detection and Ultralytics tracking interface
+ultralytics==8.4.112
+
+# Linear assignment dependency used by ByteTrack
+lap==0.5.12
+
+# Shared YAML configuration files
+PyYAML==6.0.2
+
+# Jetson node <-> central coordinator metadata communication
+paho-mqtt==2.1.0
