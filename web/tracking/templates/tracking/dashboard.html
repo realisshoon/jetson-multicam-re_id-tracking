@@ -115,15 +115,22 @@ button{font-family:inherit}
 .panel > h2 span{color:var(--dimmer);font-variant-numeric:tabular-nums}
 
 /* ── 카메라 월 (다분할 동시 감시) ─────────────────────────────────── */
+/* WALL_VH 만큼을 카메라 월에 준다 — 화면 높이 기준이라 창 크기가 달라도
+   행 수(2행/3행)만큼 항상 스크롤 없이 한 화면에 꽉 찬다. 화면에 넘치면
+   이 calc() 의 빼는 값(240px)을 늘리거나 줄이면 된다. */
 .wall{display:grid;gap:10px;padding:10px;
-  grid-template-columns:repeat(2,minmax(0,1fr))}
-.wall[data-n="1"]{grid-template-columns:minmax(0,1fr)}
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-rows:repeat(2,minmax(0,1fr));
+  height:calc(100vh - 240px);min-height:280px}
+.wall[data-n="1"]{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .wall[data-n="5"],.wall[data-n="6"],.wall[data-n="7"],.wall[data-n="8"],
-.wall[data-n="9"]{grid-template-columns:repeat(3,minmax(0,1fr))}
-@media(max-width:760px){.wall[data-n]{grid-template-columns:minmax(0,1fr)}}
+.wall[data-n="9"]{grid-template-columns:repeat(3,minmax(0,1fr));
+  grid-template-rows:repeat(3,minmax(0,1fr))}
+@media(max-width:760px){.wall[data-n]{grid-template-columns:minmax(0,1fr);
+  grid-template-rows:none;height:auto}}
 
 .cam{position:relative;margin:0;background:#000;border:1px solid var(--rule);
-  border-radius:3px;aspect-ratio:4/3;overflow:hidden}
+  border-radius:3px;overflow:hidden;width:100%;height:100%}
 .cam img{width:100%;height:100%;object-fit:contain;display:block}
 .cam .noimg{display:grid;place-items:center;width:100%;height:100%;
   font-family:var(--mono);font-size:12px;letter-spacing:.1em;
