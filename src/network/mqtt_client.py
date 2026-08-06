@@ -16,6 +16,7 @@ MQTT_ENTRY_TOPIC = "cctv/entry"
 
 
 JsonMessageHandler = Callable[[str, dict[str, Any]], None]
+RawMessageHandler = Callable[[str, bytes], None]
 
 
 class JsonMqttClient:
@@ -40,6 +41,10 @@ class JsonMqttClient:
 
         self._connected = threading.Event()
         self._subscriptions: dict[str, tuple[int, JsonMessageHandler]] = {}
+        self._raw_subscriptions: dict[
+            str,
+            tuple[int, RawMessageHandler],
+        ] = {}
 
     def subscribe_json(
         self,
@@ -48,6 +53,16 @@ class JsonMqttClient:
         qos: int = 1,
     ) -> None:
         self._subscriptions[topic] = (qos, handler)
+        if self._connected.is_set():
+            self.client.subscribe(topic, qos=qos)
+
+    def subscribe_raw(
+        self,
+        topic: str,
+        handler: RawMessageHandler,
+        qos: int = 1,
+    ) -> None:
+        self._raw_subscriptions[topic] = (qos, handler)
         if self._connected.is_set():
             self.client.subscribe(topic, qos=qos)
 
@@ -109,6 +124,8 @@ class JsonMqttClient:
         self._connected.set()
         for topic, (qos, _) in self._subscriptions.items():
             client.subscribe(topic, qos=qos)
+        for topic, (qos, _) in self._raw_subscriptions.items():
+            client.subscribe(topic, qos=qos)
 
     def _on_disconnect(
         self,
@@ -126,6 +143,14 @@ class JsonMqttClient:
         userdata: Any,
         message: mqtt.MQTTMessage,
     ) -> None:
+        for topic_filter, (_, handler) in self._raw_subscriptions.items():
+            if mqtt.topic_matches_sub(topic_filter, message.topic):
+                try:
+                    handler(message.topic, bytes(message.payload))
+                except Exception as error:
+                    print(f"MQTT 메시지 처리 실패 ({message.topic}): {error}")
+                return
+
         try:
             decoded = json.loads(message.payload.decode("utf-8"))
             if not isinstance(decoded, dict):

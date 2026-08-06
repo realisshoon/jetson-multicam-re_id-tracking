@@ -29,6 +29,10 @@ __pycache__/
 # 로컬 데이터베이스
 *.db
 db.sqlite3
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+*.csv
 
 # VS Code
 .vscode/

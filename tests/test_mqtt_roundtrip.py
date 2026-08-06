@@ -114,6 +114,28 @@ class JsonMqttClientTests(unittest.TestCase):
 
         self.assertEqual(received, [{"status": "accepted"}])
 
+    def test_raw_subscription_preserves_exact_payload_bytes(self) -> None:
+        client = JsonMqttClient(
+            BrokerConfig(host="localhost", port=1883, keepalive=60),
+            client_id="raw_unit_test_client",
+        )
+        received: list[tuple[str, bytes]] = []
+        client.subscribe_raw(
+            "cctv/#",
+            lambda topic, payload: received.append((topic, payload)),
+        )
+        mqtt_message = SimpleNamespace(
+            topic="cctv/passage/b",
+            payload=b"not-even-json\x00",
+        )
+
+        client._on_message(client.client, None, mqtt_message)
+
+        self.assertEqual(
+            received,
+            [("cctv/passage/b", b"not-even-json\x00")],
+        )
+
 
 class ServerProcessingTests(unittest.TestCase):
     def test_response_uses_sending_node_topic(self) -> None:
