@@ -27,6 +27,7 @@ class BrokerConfig:
 
 @dataclass(frozen=True)
 class TopicConfig:
+    camera_a_entry: str
     publish: str
     subscribe: str
     broadcast: str
@@ -83,6 +84,11 @@ def load_mqtt_config(
     password = _optional_environment_value(broker, "password_env")
 
     topic_config = TopicConfig(
+        camera_a_entry=_string_default(
+            topics,
+            "camera_a_entry",
+            default="cctv/entry",
+        ),
         publish=_topic_template(topics, "publish"),
         subscribe=_topic_template(topics, "subscribe"),
         broadcast=_string(topics, "broadcast"),
@@ -115,6 +121,16 @@ def _string(data: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise MqttConfigError(f"{key} 항목은 비어 있지 않은 문자열이어야 합니다.")
     return value.strip()
+
+
+def _string_default(
+    data: dict[str, Any],
+    key: str,
+    default: str,
+) -> str:
+    if key not in data:
+        return default
+    return _string(data, key)
 
 
 def _integer(data: dict[str, Any], key: str, default: int) -> int:

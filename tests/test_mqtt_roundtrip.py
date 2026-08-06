@@ -27,8 +27,9 @@ class MqttConfigTests(unittest.TestCase):
     def test_example_config_and_topics(self) -> None:
         config = load_mqtt_config(EXAMPLE_CONFIG)
 
-        self.assertEqual(config.broker.host, "BROKER_PC_IP")
+        self.assertEqual(config.broker.host, "127.0.0.1")
         self.assertEqual(config.broker.port, 1883)
+        self.assertEqual(config.topics.camera_a_entry, "cctv/entry")
         self.assertEqual(config.topics.node_data("D"), "nodes/D/data")
         self.assertEqual(config.topics.node_result("D"), "server/D/result")
         self.assertEqual(config.topics.all_node_data(), "nodes/+/data")
@@ -113,6 +114,25 @@ class JsonMqttClientTests(unittest.TestCase):
         client._on_message(client.client, None, mqtt_message)
 
         self.assertEqual(received, [{"status": "accepted"}])
+
+    def test_raw_subscription_preserves_mqtt_bytes(self) -> None:
+        client = JsonMqttClient(
+            BrokerConfig(host="localhost", port=1883, keepalive=60),
+            client_id="raw_unit_test_client",
+        )
+        received: list[bytes] = []
+        client.subscribe_raw(
+            "cctv/entry",
+            lambda topic, payload: received.append(payload),
+        )
+        mqtt_message = SimpleNamespace(
+            topic="cctv/entry",
+            payload=b'{"event":"ENTRY"}',
+        )
+
+        client._on_message(client.client, None, mqtt_message)
+
+        self.assertEqual(received, [b'{"event":"ENTRY"}'])
 
 
 class ServerProcessingTests(unittest.TestCase):

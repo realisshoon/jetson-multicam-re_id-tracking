@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import threading
 import time
@@ -13,6 +14,7 @@ import torch
 from ultralytics import YOLO
 
 from src.network.mqtt_client import MqttPublisher
+from src.network.mqtt_config import load_mqtt_config
 from src.reid.reid_engine import ReIDTensorRTEngine
 
 
@@ -35,6 +37,12 @@ EVENT_LOG_PATH = (
     PROJECT_ROOT
     / "logs"
     / "node_a_entry.csv"
+)
+
+DEFAULT_MQTT_CONFIG_PATH = (
+    PROJECT_ROOT
+    / "configs"
+    / "mqtt_config.yaml"
 )
 
 
@@ -199,8 +207,8 @@ def start_web_server() -> None:
     )
 
     print(
-        f"Camera A 웹 서버: "
-        f"http://10.10.20.56:{SERVER_PORT}"
+        f"Camera A 웹 서버 포트: {SERVER_PORT} "
+        "(접속 시 Jetson LAN IP 사용)"
     )
 
     server.serve_forever()
@@ -552,8 +560,22 @@ def draw_entry_guide(
 # 메인
 # ============================================================
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Jetson Camera A entrance tracking",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_MQTT_CONFIG_PATH,
+        help="MQTT YAML 설정 파일",
+    )
+    return parser.parse_args()
+
 def main() -> None:
     global latest_jpeg
+
+    args = parse_args()
 
     ensure_log_file()
 
@@ -577,7 +599,16 @@ def main() -> None:
     )
 
     # MQTT 연결
-    mqtt_publisher = MqttPublisher()
+    mqtt_config = load_mqtt_config(
+        args.config,
+        node_id_override="A",
+    )
+    mqtt_publisher = MqttPublisher(
+        broker_host=mqtt_config.broker.host,
+        broker_port=mqtt_config.broker.port,
+        keepalive=mqtt_config.broker.keepalive,
+        entry_topic=mqtt_config.topics.camera_a_entry,
+    )
     mqtt_publisher.connect()
 
     # Camera A

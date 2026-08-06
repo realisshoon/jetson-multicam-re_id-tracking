@@ -42,6 +42,9 @@ db.sqlite3
 
 # 데이터와 실행 결과
 datasets/
+data/*.db
+data/*.sqlite
+data/*.sqlite3
 outputs/
 runs/
 logs/
