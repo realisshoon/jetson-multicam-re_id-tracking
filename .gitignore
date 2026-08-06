@@ -1,5 +1,6 @@
 # Python 가상환경
 .venv/
+.venv310/
 venv/
 
 # pj Python virtual environment
@@ -24,6 +25,10 @@ __pycache__/
 *.pem
 *.key
 /configs/mqtt_config.yaml
+
+# 로컬 데이터베이스
+*.db
+db.sqlite3
 
 # VS Code
 .vscode/

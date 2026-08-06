@@ -131,7 +131,7 @@ class JsonMqttClient:
             if not isinstance(decoded, dict):
                 raise ValueError("최상위 JSON 값이 object가 아닙니다.")
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-            print(f"잘못된 MQTT JSON 무시 ({message.topic}): {error}")
+            print(f"[REJECTED] 잘못된 MQTT JSON ({message.topic}): {error}")
             return
 
         for topic_filter, (_, handler) in self._subscriptions.items():
