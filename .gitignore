@@ -1,60 +1,67 @@
-# Python 가상환경
+# Python virtual environments (the current checkout was once created inside one)
 .venv/
 venv/
-
-# pj Python virtual environment
 /bin/
 /include/
 /lib/
-/lib64/
 /lib64
 /share/
 /pyvenv.cfg
 
-# Python 캐시
+# Python caches and tooling
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
 *.py[cod]
 *$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# 비밀번호 및 환경변수
+# Runtime data
+/logs/
+/outputs/
+/captures/
+/runs/
+/datasets/
+*.log
+
+# Local databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Secrets and machine-local configuration
 .env
+.env.*
+!.env.example
 *.pem
 *.key
+/configs/mqtt.yaml
 
-# VS Code
-.vscode/
-
-# 모델 및 TensorRT 파일
+# Model binaries are provisioned separately; keep the manifest in Git.
 *.pt
 *.pth
 *.onnx
 *.engine
 *.trt
+/models/*
+!/models/MANIFEST.md
 
-# 데이터와 실행 결과
-datasets/
-outputs/
-runs/
-logs/
-/datasets/
-/logs/
-/models/
-/outputs/
-/runs/
-
-# 영상 파일
-*.mp4
-*.avi
-*.mkv
-*.mov
-
-# Local Re-ID person capture samples
+# Local Re-ID validation images
 /external/reid_jetson_package/samples/
 
-# 임시 파일
-*.tmp
-*.log
+# Editor and OS files
+.vscode/
+.idea/
 .DS_Store
+
+# Local scratch and safety-copy files
+*.tmp
+*.bak
+*~
+*_before_*.py
+/*line_x
+/=
