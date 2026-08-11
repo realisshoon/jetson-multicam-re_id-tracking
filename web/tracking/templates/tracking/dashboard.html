@@ -3,29 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Multicam Re-ID 통합관제</title>
+<title>열정강혁 통합관제</title>
 <style>
-/* ── 토큰 ───────────────────────────────────────────────────────────
-   통제구역(방산·교정·보안시설) 상황실 기준.
-   평시는 차분한 강청색, 감지 순간에만 적색이 등장한다.
-   적색을 아끼는 게 이 화면의 규칙이다 — 항상 붉으면 아무것도 못 읽는다.
-   폰트는 시스템 스택만 — 현장에서 젯슨이 오프라인일 수 있다. */
+/* ── 토큰 — Bootswatch "Slate" 실제 색상값 그대로 ──────────────────────
+   검정 배경 + 어두운 슬레이트 패널. success/info/warning/danger 는
+   Slate 원본 값(각각 #62c462/#5bc0de/#f89406/#ee5f5b) 그대로 사용.
+   폰트는 Bootstrap 5 기본 system-ui 스택(별도 구글폰트 없음). */
 :root{
-  --bg:#0A0E13;
-  --panel:#121821;  --panel-2:#1A222D;  --panel-3:#222C39;
-  --rule:#26313F;   --rule-2:#33414F;
-  --text:#E9F0F7;   --dim:#94A7B9;      --dimmer:#5E7286;
-  --calm:#5AA9E6;                 /* 평시 · 정상 */
-  --alert:#FF5147;                /* 감지 · 경보 */
-  --warn:#F5A524;                 /* 주의 · 데이터 조작 */
-  --ok:#34D399;
-  --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
-  --ui: ui-sans-serif,system-ui,-apple-system,"Segoe UI","Apple SD Gothic Neo",
-        "Noto Sans KR","Malgun Gothic",sans-serif;
+  --bg:#000000;
+  --panel:#32383e;  --panel-2:#23272b;  --panel-3:#1b1e21;
+  --rule:#52575c;   --rule-2:#63696f;
+  --text:#dee2e6;   --dim:#aaaaaa;      --dimmer:#7a8288;
+  --calm:#5bc0de;                 /* 평시 · 정상 (Slate info) */
+  --alert:#ee5f5b;                /* 감지 · 경보 (Slate danger) */
+  --warn:#f89406;                 /* 주의 · 신원 확인 중 (Slate warning) */
+  --ok:#62c462;                   /* 등록자 확인됨 (Slate success) */
+  --mono: SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+  --ui: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","Apple SD Gothic Neo",
+        "Noto Sans KR","Malgun Gothic",Arial,sans-serif;
 }
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--ui)}
-body{padding:12px;font-size:15px;line-height:1.5;
+body{padding:12px;font-size:16.5px;line-height:1.5;
   -webkit-font-smoothing:antialiased}
 a{color:var(--calm)}
 button{font-family:inherit}
@@ -35,51 +34,11 @@ button{font-family:inherit}
    이 대비가 "기계가 읽는 값"과 "사람이 읽는 문장"을 갈라준다. */
 .code{font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase}
 
-/* ── 경보 스트립 (시그니처) ────────────────────────────────────────
-   왼쪽 큰 숫자 = 감지된 카메라 번호. 오른쪽 셀 = 전체 카메라 상태.
-   경보가 뜨는 순간 "어느 화면을 봐야 하는지"가 먼저 읽히게 만든다. */
-.alert{position:relative;display:flex;align-items:stretch;gap:0;
-  border:1px solid var(--rule);border-left:0;background:var(--panel);
-  border-radius:4px;overflow:hidden;margin-bottom:12px;min-height:78px}
-.alert::before{content:"";position:absolute;inset:0 0 0 0;pointer-events:none;
-  border-left:5px solid var(--dimmer);transition:border-color .18s}
-.alert[data-state="idle"]::before{border-left-color:var(--calm)}
-.alert[data-state="alert"]::before{border-left-color:var(--alert)}
-.alert-sig{flex:0 0 96px;display:grid;place-items:center;
-  background:var(--panel-2);border-right:1px solid var(--rule);
-  font-family:var(--mono);font-size:34px;font-weight:600;line-height:1;
-  color:var(--dimmer);font-variant-numeric:tabular-nums;transition:.18s}
-.alert[data-state="idle"] .alert-sig{color:var(--calm)}
-.alert[data-state="alert"] .alert-sig{color:#fff;background:var(--alert)}
-.alert-body{flex:1;min-width:0;display:flex;flex-direction:column;
-  justify-content:center;padding:12px 18px;gap:3px}
-.alert-msg{font-size:20px;font-weight:600;letter-spacing:-.01em;
-  color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.alert[data-state="alert"] .alert-msg{color:#FFD9D6}
-.alert-sub{font-size:13px;color:var(--dim)}
-.alert-side{flex:0 0 auto;display:flex;align-items:center;gap:16px;
-  padding:0 18px;border-left:1px solid var(--rule);background:var(--panel-2)}
-.cam-map{display:flex;gap:6px}
-.cam-map .cell{font-family:var(--mono);font-size:12px;letter-spacing:.08em;
-  min-width:34px;text-align:center;padding:6px 0;border-radius:3px;
-  border:1px solid var(--rule-2);color:var(--dimmer);background:#0006;
-  font-variant-numeric:tabular-nums;transition:.15s}
-.cam-map .cell.live{border-color:var(--rule-2);color:var(--dim)}
-.cam-map .cell.hot{border-color:var(--alert);color:#fff;background:var(--alert)}
-.alert-time{font-family:var(--mono);font-size:16px;color:var(--dim);
-  font-variant-numeric:tabular-nums;letter-spacing:.04em}
-/* 경보 시 스트립 위를 한 번 훑는 빛. 장식이 아니라 "방금 갱신됐다"는 신호다. */
-.alert[data-state="alert"]::after{content:"";position:absolute;top:0;bottom:0;
-  width:120px;pointer-events:none;
-  background:linear-gradient(90deg,transparent,#FF514722,transparent);
-  animation:sweep 1.4s linear infinite}
-@keyframes sweep{from{left:-120px}to{left:100%}}
-
 /* ── 상단 바 ──────────────────────────────────────────────────────── */
 .bar{display:flex;align-items:center;gap:20px;flex-wrap:wrap;
   border:1px solid var(--rule);background:var(--panel);
   padding:10px 16px;border-radius:4px;margin-bottom:12px}
-.brand{font-family:var(--mono);font-size:12px;letter-spacing:.2em;
+.brand{font-family:var(--mono);font-size:13.2px;letter-spacing:.2em;
   text-transform:uppercase;color:var(--dim);white-space:nowrap}
 .rec{display:inline-block;width:8px;height:8px;border-radius:50%;
   background:var(--alert);margin-right:9px;vertical-align:1px;
@@ -87,19 +46,56 @@ button{font-family:inherit}
 .rec.off{background:var(--dimmer);animation:none}
 @keyframes blink{0%,55%{opacity:1}56%,100%{opacity:.15}}
 .sep{width:1px;align-self:stretch;background:var(--rule)}
-.metric{font-family:var(--mono);font-size:11px;color:var(--dimmer);
+.metric{font-family:var(--mono);font-size:12.1px;color:var(--dimmer);
   letter-spacing:.14em;text-transform:uppercase;white-space:nowrap}
-.metric b{display:block;font-size:23px;color:var(--text);font-weight:600;
+.metric b{display:block;font-size:25.3px;color:var(--text);font-weight:600;
   letter-spacing:0;margin-top:1px;font-variant-numeric:tabular-nums}
 .metric b.hot{color:var(--alert)}
+/* 감지 상태 — 카메라 어딘가에서 확인중/등록됨/미등록 사이클이 돌고 있으면
+   빨간 배지로 "감지중", 아무 것도 없으면 검정 배지로 "대기중". 글자색만
+   바꾸면 어두운 배경에서 눈에 잘 안 띄어서 배경째로 바뀌는 배지로 했다. */
+.detect-pill{display:block;margin-top:1px;padding:3px 10px;border-radius:3px;
+  font-family:var(--mono);font-size:15.4px;font-weight:600;letter-spacing:0;
+  width:fit-content;background:#000;color:var(--dimmer);
+  transition:background-color .15s,color .15s}
+.detect-pill.active{background:var(--alert);color:#fff}
+/* 미등록자 감지 시 "| CAM X 미등록 인물 감지" — 평소엔 텍스트가 비어
+   있어 자리만 있고 보이지 않는다. 카메라 출력창 색이 이미 어느 화면인지
+   보여주므로, 여긴 눈을 안 보고 있어도 읽히는 문구 알림용. */
+.alert-note{font-family:var(--mono);font-size:13.2px;font-weight:700;
+  color:var(--alert);letter-spacing:.02em;white-space:nowrap}
 .bar .spacer{margin-left:auto}
-.btn{font-size:13px;background:var(--panel-2);color:var(--dim);
+.btn{font-size:14.3px;background:var(--panel-2);color:var(--dim);
   border:1px solid var(--rule-2);padding:8px 14px;border-radius:3px;
   cursor:pointer;white-space:nowrap;transition:.14s}
 .btn:hover{color:var(--text);border-color:var(--calm);background:var(--panel-3)}
 .btn:focus-visible{outline:2px solid var(--calm);outline-offset:2px}
-.btn.go{color:#CFE8FF;border-color:#2F5B7E}
 .btn.on{color:var(--ok);border-color:var(--ok)}
+.clock{font-family:var(--mono);font-size:28.6px;font-weight:600;color:var(--text);
+  font-variant-numeric:tabular-nums;letter-spacing:.04em}
+
+/* ── 설정 드롭다운 ────────────────────────────────────────────────── */
+.settings{position:relative}
+.settings-panel{position:absolute;top:calc(100% + 6px);right:0;z-index:20;
+  min-width:236px;background:var(--panel-2);border:1px solid var(--rule);
+  border-radius:4px;padding:6px;box-shadow:0 10px 24px #0009}
+.settings-row{display:flex;align-items:center;justify-content:space-between;
+  gap:12px;padding:8px 10px;font-size:14.3px;color:var(--text);
+  border-radius:3px;cursor:pointer}
+.settings-row:hover{background:var(--panel-3)}
+.settings-row input[type="checkbox"]{width:16px;height:16px;accent-color:var(--calm)}
+.settings-row.link{color:var(--calm);text-decoration:none;font-family:var(--mono);
+  font-size:13.2px;letter-spacing:.04em}
+.settings-sub{padding:2px 10px 8px;border-bottom:1px solid var(--rule);
+  margin-bottom:4px;display:flex;flex-direction:column;gap:8px}
+.settings-slider{display:grid;grid-template-columns:44px 1fr 52px;align-items:center;
+  gap:8px;font-size:13.2px;color:var(--dim)}
+.settings-slider input[type="range"]{width:100%;accent-color:var(--calm)}
+.settings-val{font-family:var(--mono);font-size:12.1px;color:var(--dimmer);
+  text-align:right;font-variant-numeric:tabular-nums}
+.settings-sub select{width:100%;background:var(--panel-3);color:var(--text);
+  border:1px solid var(--rule-2);border-radius:3px;padding:5px 6px;font-size:13.2px}
+.settings-test{width:100%;text-align:center;margin-top:2px}
 
 /* ── 레이아웃 ─────────────────────────────────────────────────────── */
 .grid{display:grid;grid-template-columns:minmax(0,1fr) 372px;gap:12px;
@@ -109,7 +105,7 @@ button{font-family:inherit}
 
 .panel{border:1px solid var(--rule);background:var(--panel);border-radius:4px}
 .panel > h2{margin:0;padding:10px 14px;border-bottom:1px solid var(--rule);
-  font-family:var(--mono);font-size:11px;letter-spacing:.2em;font-weight:500;
+  font-family:var(--mono);font-size:12.1px;letter-spacing:.2em;font-weight:500;
   text-transform:uppercase;color:var(--dim);
   display:flex;justify-content:space-between;align-items:center}
 .panel > h2 span{color:var(--dimmer);font-variant-numeric:tabular-nums}
@@ -117,11 +113,11 @@ button{font-family:inherit}
 /* ── 카메라 월 (다분할 동시 감시) ─────────────────────────────────── */
 /* WALL_VH 만큼을 카메라 월에 준다 — 화면 높이 기준이라 창 크기가 달라도
    행 수(2행/3행)만큼 항상 스크롤 없이 한 화면에 꽉 찬다. 화면에 넘치면
-   이 calc() 의 빼는 값(240px)을 늘리거나 줄이면 된다. */
+   이 calc() 의 빼는 값(160px)을 늘리거나 줄이면 된다(줄이면 카메라가 커짐). */
 .wall{display:grid;gap:10px;padding:10px;
   grid-template-columns:repeat(2,minmax(0,1fr));
   grid-template-rows:repeat(2,minmax(0,1fr));
-  height:calc(100vh - 240px);min-height:280px}
+  height:calc(100vh - 160px);min-height:420px}
 .wall[data-n="1"]{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .wall[data-n="5"],.wall[data-n="6"],.wall[data-n="7"],.wall[data-n="8"],
 .wall[data-n="9"]{grid-template-columns:repeat(3,minmax(0,1fr));
@@ -130,13 +126,20 @@ button{font-family:inherit}
   grid-template-rows:none;height:auto}}
 
 .cam{position:relative;margin:0;background:#000;border:1px solid var(--rule);
-  border-radius:3px;overflow:hidden;width:100%;height:100%}
+  border-radius:3px;overflow:hidden;width:100%;height:100%;transition:border-color .15s}
 .cam img{width:100%;height:100%;object-fit:contain;display:block}
 .cam .noimg{display:grid;place-items:center;width:100%;height:100%;
-  font-family:var(--mono);font-size:12px;letter-spacing:.1em;
+  font-family:var(--mono);font-size:13.2px;letter-spacing:.1em;
   color:var(--dimmer);background:#000}
 .cam.hot{border-color:var(--alert)}
-/* 모서리 브래킷 — 감지된 화면만 붉게 잡아준다 */
+/* 감지 상태(카메라별) — 확인중/등록됨/미등록에 따라 출력창 테두리가
+   직접 바뀐다. 예전엔 화면 상단 별도 스트립이 이 역할을 했지만, 카메라가
+   여러 대 동시에 감지되면 한 대만 보여줄 수밖에 없어서 카메라 자체에
+   붙였다 — 여러 대가 동시에 감지돼도 각자 실시간으로 색이 바뀐다. */
+.cam.st-checking{border-color:var(--warn)}
+.cam.st-registered{border-color:var(--ok)}
+.cam.st-alert{border-color:var(--alert)}
+/* 모서리 브래킷 — 감지된 화면만 상태색으로 잡아준다 */
 .cam .bk{position:absolute;width:18px;height:18px;pointer-events:none;
   border:2px solid var(--rule-2);transition:border-color .15s}
 .cam .bk.tl{top:6px;left:6px;border-right:0;border-bottom:0}
@@ -144,21 +147,37 @@ button{font-family:inherit}
 .cam .bk.bl{bottom:6px;left:6px;border-right:0;border-top:0}
 .cam .bk.br{bottom:6px;right:6px;border-left:0;border-top:0}
 .cam.hot .bk{border-color:var(--alert)}
+.cam.st-checking .bk{border-color:var(--warn)}
+.cam.st-registered .bk{border-color:var(--ok)}
+.cam.st-alert .bk{border-color:var(--alert)}
 .cam figcaption{position:absolute;top:0;left:0;right:0;
   display:flex;align-items:center;gap:10px;padding:8px 10px;
   background:linear-gradient(#000C,#000A 55%,transparent)}
-.cam .no{font-family:var(--mono);font-size:12px;letter-spacing:.12em;
+.cam .no{font-family:var(--mono);font-size:13.2px;letter-spacing:.12em;
   color:var(--calm);font-variant-numeric:tabular-nums}
-.cam .nm{font-size:14px;font-weight:600;color:var(--text);
+.cam .nm{font-size:15.4px;font-weight:600;color:var(--text);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cam .pill{margin-left:auto;font-family:var(--mono);font-size:11px;
+.cam .pill{margin-left:auto;font-family:var(--mono);font-size:12.1px;
   letter-spacing:.1em;padding:3px 8px;border-radius:2px;white-space:nowrap;
   border:1px solid var(--rule-2);color:var(--dim);background:#000A}
 .cam.hot .pill{border-color:var(--alert);background:var(--alert);color:#fff}
+.cam.st-checking .pill{border-color:var(--warn);background:var(--warn);color:#fff}
+.cam.st-registered .pill{border-color:var(--ok);background:var(--ok);color:#fff}
+.cam.st-alert .pill{border-color:var(--alert);background:var(--alert);color:#fff}
 .cam .src{position:absolute;left:10px;bottom:8px;font-family:var(--mono);
-  font-size:11px;color:var(--dimmer);background:#000A;padding:2px 6px;
+  font-size:12.1px;color:var(--dimmer);background:#000A;padding:2px 6px;
   border-radius:2px;max-width:70%;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap}
+
+/* ── 카메라별 감지 횟수 ───────────────────────────────────────────── */
+/* "감지 인물" 목록이 비어 있어도(추적 중인 사람이 없어도) 카메라마다
+   오늘 몇 번 인식했는지는 항상 보이게 — 명단과는 별개로 "대충 몇 명
+   지나갔는지" 감이 오게 하는 용도. */
+.cam-counts{display:flex;flex-wrap:wrap;gap:6px 14px;padding:9px 14px;
+  border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:12.1px;
+  color:var(--dim)}
+.cam-counts .item b{color:var(--text);font-weight:600;margin-right:5px}
+.cam-counts .item .n{font-variant-numeric:tabular-nums}
 
 /* ── 인물 명단 ────────────────────────────────────────────────────── */
 .roster{padding:8px;display:flex;flex-direction:column;gap:7px;
@@ -171,10 +190,10 @@ button{font-family:inherit}
 .card img,.card .noimg{width:56px;height:74px;object-fit:cover;
   background:#000;border:1px solid var(--rule);border-radius:2px}
 .card .noimg{display:grid;place-items:center;font-family:var(--mono);
-  font-size:10px;color:var(--dimmer)}
-.pid{font-family:var(--mono);font-size:11px;color:var(--dimmer);
+  font-size:11px;color:var(--dimmer)}
+.pid{font-family:var(--mono);font-size:12.1px;color:var(--dimmer);
   letter-spacing:.1em;font-variant-numeric:tabular-nums}
-.pname{font-size:15px;font-weight:600;margin:2px 0 7px;line-height:1.3;
+.pname{font-size:16.5px;font-weight:600;margin:2px 0 7px;line-height:1.3;
   cursor:text}
 .pname.unnamed{color:var(--dim);font-weight:400;font-style:italic}
 .pname input{width:100%;background:#000;border:1px solid var(--calm);
@@ -182,33 +201,46 @@ button{font-family:inherit}
   border-radius:2px}
 .row{display:flex;align-items:center;gap:8px}
 /* 배지 사이 선 = 카메라를 가로질러 동일인으로 매칭됨. Re-ID 가 통했다는 표시. */
-.link{display:flex;align-items:center;font-family:var(--mono);font-size:11px;
+.link{display:flex;align-items:center;font-family:var(--mono);font-size:12.1px;
   letter-spacing:.08em;min-width:0;flex-wrap:wrap}
 .link .cam-badge{border:1px solid var(--rule-2);color:var(--dim);
   padding:2px 7px;border-radius:2px;white-space:nowrap}
 .link.matched .cam-badge{border-color:var(--calm);color:var(--calm)}
 .link .wire{flex:0 0 16px;height:1px;background:var(--calm);opacity:.6}
-.seen{font-family:var(--mono);font-size:11px;color:var(--dimmer);
+.seen{font-family:var(--mono);font-size:12.1px;color:var(--dimmer);
   margin-left:auto;font-variant-numeric:tabular-nums}
 
 /* ── 이벤트 로그 ──────────────────────────────────────────────────── */
-.log{font-size:13px;max-height:30vh;overflow-y:auto}
+.log{font-size:14.3px;max-height:30vh;overflow-y:auto}
 .log .e{display:flex;align-items:baseline;gap:10px;padding:8px 14px;
   border-bottom:1px solid #ffffff08}
 .log .e:last-child{border-bottom:0}
-.log time{font-family:var(--mono);font-size:12px;color:var(--dimmer);
+.log time{font-family:var(--mono);font-size:13.2px;color:var(--dimmer);
   font-variant-numeric:tabular-nums;flex:0 0 auto}
 .log .who{color:var(--text);flex:1;min-width:0;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
-.log .cam{font-family:var(--mono);font-size:11px;color:var(--dim);
+.log .cam{font-family:var(--mono);font-size:12.1px;color:var(--dim);
   flex:0 0 auto}
-.log .kind{font-size:12px;padding:1px 7px;border-radius:2px;flex:0 0 auto;
+.log .kind{font-size:13.2px;padding:1px 7px;border-radius:2px;flex:0 0 auto;
   border:1px solid var(--rule-2);color:var(--dim)}
 .log .kind.enter{border-color:var(--alert);color:var(--alert)}
 .log .kind.exit{border-color:var(--rule-2);color:var(--dimmer)}
 .log .kind.merge,.log .kind.split{border-color:var(--warn);color:var(--warn)}
 
-.empty{padding:24px 16px;color:var(--dimmer);font-size:14px}
+/* ── 인원 통계 ───────────────────────────────────────────────────── */
+.stats{padding:10px 14px}
+.stats-row{display:grid;grid-template-columns:2.4fr 1fr 1fr 1fr;gap:6px;
+  padding:7px 0;border-bottom:1px solid #ffffff08;font-size:14.3px}
+.stats-row:last-child{border-bottom:0}
+.stats-row span:not(:first-child){text-align:right}
+.stats-row.head{color:var(--dimmer);font-family:var(--mono);font-size:11px;
+  letter-spacing:.1em;text-transform:uppercase}
+.stats-row:not(.head) span:first-child{color:var(--dim)}
+.stats-row:not(.head) span:nth-child(2){color:var(--ok)}
+.stats-row:not(.head) span:nth-child(3){color:var(--warn)}
+.stats-row:not(.head) span:nth-child(4){color:var(--text);font-weight:600}
+
+.empty{padding:24px 16px;color:var(--dimmer);font-size:15.4px}
 ::-webkit-scrollbar{width:9px;height:9px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--rule-2);border-radius:5px}
@@ -221,36 +253,48 @@ button{font-family:inherit}
 
 <script id="cam-map-data" type="application/json">{ {% for c in cameras %}"{{ c.name|escapejs }}":{{ c.index }}{% if not forloop.last %},{% endif %}{% endfor %} }</script>
 
-<!-- ── 경보 스트립 ─────────────────────────────────────────────────── -->
-<div class="alert" id="alert" data-state="standby" role="status" aria-live="polite">
-  <div class="alert-sig" id="alert-sig">—</div>
-  <div class="alert-body">
-    <div class="alert-msg" id="alert-msg">감시 대기</div>
-    <div class="alert-sub" id="alert-sub">시작을 누르면 감시를 시작한다.</div>
-  </div>
-  <div class="alert-side">
-    <div class="cam-map" id="cam-strip">
-      {% for c in cameras %}{% with L="ABCDEFGHIJKLMNOP"|slice:forloop.counter|slice:"-1:" %}<span class="cell" data-cam="{{ c.index }}" data-label="{{ L }}" title="{{ c.name }}">{{ L }}</span>{% endwith %}{% endfor %}
-    </div>
-    <div class="alert-time num" id="alert-time">--:--:--</div>
-  </div>
-</div>
-
 <!-- ── 상단 바 ─────────────────────────────────────────────────────── -->
 <div class="bar">
-  <div class="brand"><span class="rec off" id="rec"></span>Multicam Re-ID</div>
+  <div class="brand"><span class="rec off" id="rec"></span>열정강혁</div>
   <div class="sep"></div>
   <div class="metric">FPS<b id="m-fps">—</b></div>
   <div class="metric">현재 화면<b id="m-now" class="hot">0</b></div>
   <div class="metric">누적 인물<b id="m-total">0</b></div>
   <div class="metric">카메라<b id="m-cams">{{ cameras|length }}</b></div>
-  <div class="metric">JETSON MQTT<b id="m-mqtt">—</b></div>
+  <div class="metric">감지 상태<span class="detect-pill" id="detect-pill">대기중</span></div>
+  <div class="alert-note" id="alert-note"></div>
   <div class="spacer"></div>
-  <button class="btn go" data-cmd="start">감시 시작</button>
-  <button class="btn" data-cmd="stop">정지</button>
+  <button class="btn{% if config.detection_enabled %} on{% endif %}" id="detect-toggle-btn"
+          type="button" data-enabled="{{ config.detection_enabled|yesno:'1,0' }}"
+          title="끄면 새 감지 이벤트를 안 받는다 · 영상은 계속 나옴">
+    {% if config.detection_enabled %}감지 켜짐{% else %}감지 꺼짐{% endif %}
+  </button>
   <button class="btn" data-cmd="reload_cameras">카메라 다시 읽기</button>
-  <button class="btn" id="snd" type="button">알림음 켜기</button>
-  <a class="btn" href="/admin/tracking/person/" style="text-decoration:none">인물 관리</a>
+  <div class="settings">
+    <button class="btn" id="settings-btn" type="button" aria-haspopup="true" aria-expanded="false">설정</button>
+    <div class="settings-panel" id="settings-panel" hidden>
+      <label class="settings-row" for="snd-toggle">
+        <span>알림음</span>
+        <input type="checkbox" id="snd-toggle">
+      </label>
+      <div class="settings-sub" id="snd-detail">
+        <label class="settings-slider">
+          <span>음량</span>
+          <input type="range" id="snd-volume" min="0" max="100" step="1">
+          <span class="settings-val" id="snd-volume-val"></span>
+        </label>
+        <button class="btn settings-test" id="snd-test-chime" type="button">등록 완료음 테스트 · A</button>
+        <button class="btn settings-test" id="snd-test-warn" type="button">미등록 경고음 테스트 · B·C·D</button>
+      </div>
+      <a class="settings-row link" href="/admin/tracking/person/">인물 관리 →</a>
+      <div class="settings-row">
+        <span>중앙 DB 연동</span>
+        <span class="settings-val" id="central-status-val">확인 중…</span>
+      </div>
+      <a class="settings-row link" href="/admin/tracking/camera/">카메라 IP 설정 →</a>
+    </div>
+  </div>
+  <div class="clock num" id="wall-clock">--:--:--</div>
 </div>
 
 <!-- ── 본문 ────────────────────────────────────────────────────────── -->
@@ -271,8 +315,6 @@ button{font-family:inherit}
         <span class="bk bl"></span><span class="bk br"></span>
         <figcaption>
           <span class="no">CAM - {{ L }}</span>
-          {# 이름에 구역명(정문·복도 등)을 넣었을 때만 부제로 노출한다.
-             이름까지 "CAM - A" 로 저장하면 같은 글자가 두 번 찍히니 숨긴다. #}
           {% if c.name|lower|slice:":3" != "cam" %}<span class="nm">{{ c.name }}</span>{% endif %}
           <span class="pill" data-pill="{{ c.index }}">정상</span>
         </figcaption>
@@ -290,6 +332,7 @@ button{font-family:inherit}
   <div class="rail">
     <section class="panel">
       <h2>감지 인물 <span id="h-people">0</span></h2>
+      <div class="cam-counts" id="cam-counts"></div>
       <div class="roster" id="roster">
         <p class="empty">추적된 인물이 없다.</p>
       </div>
@@ -299,6 +342,16 @@ button{font-family:inherit}
       <h2>이벤트 기록</h2>
       <div class="log" id="log"><p class="empty">아직 기록이 없다.</p></div>
     </section>
+
+    <section class="panel">
+      <h2>인원 통계</h2>
+      <div class="stats" id="stats">
+        <div class="stats-row head"><span>기간</span><span>등록</span><span>미등록</span><span>총</span></div>
+        <div class="stats-row"><span>7일</span><span id="st-week-r" class="num">—</span><span id="st-week-u" class="num">—</span><span id="st-week-t" class="num">—</span></div>
+        <div class="stats-row"><span>14일</span><span id="st-2w-r" class="num">—</span><span id="st-2w-u" class="num">—</span><span id="st-2w-t" class="num">—</span></div>
+        <div class="stats-row"><span>30일</span><span id="st-month-r" class="num">—</span><span id="st-month-u" class="num">—</span><span id="st-month-t" class="num">—</span></div>
+      </div>
+    </section>
   </div>
 </div>
 
@@ -306,81 +359,231 @@ button{font-family:inherit}
 const CSRF = document.querySelector('[name=csrfmiddlewaretoken]').value;
 const CAM_MAP = JSON.parse(document.getElementById('cam-map-data').textContent);
 const seenCams  = new Map();     // 카메라가 늘어난 카드에만 플래시
-const camLabel  = {};            // index → A/B/C/D
-const camZone   = {};            // index → 구역명 (없으면 빈 문자열)
-document.querySelectorAll('.cam-map .cell').forEach(c=>{
-  const idx = c.dataset.cam;
-  camLabel[idx] = c.dataset.label;
-  const t = (c.title || '').trim();
-  camZone[idx] = /^cam/i.test(t) ? '' : t;   // 이름이 CAM~ 이면 중복이라 버린다
+const camLabel  = {};            // index → A/B/C/D — 카메라 월 캡션(.no)에서 그대로 읽는다
+document.querySelectorAll('.cam[data-cam]').forEach(fig=>{
+  const idx = fig.dataset.cam;
+  const noText = (fig.querySelector('.no') && fig.querySelector('.no').textContent || '').trim();
+  camLabel[idx] = noText.split('-').pop().trim() || '?';
 });
 
 function esc(s){return String(s).replace(/[&<>"]/g,
   c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
-/* ── 알림음 ─────────────────────────────────────────────────────────
-   자동재생 정책 때문에 사용자가 버튼을 눌러야 오디오가 열린다.
-   그래서 기본 꺼짐이고, 버튼 클릭이 곧 허용 제스처가 된다. */
-let AC=null, soundOn=false;
-document.getElementById('snd').onclick = function(){
-  soundOn = !soundOn;
-  this.classList.toggle('on', soundOn);
-  this.textContent = soundOn ? '알림음 켜짐' : '알림음 켜기';
-  if(soundOn){
-    AC = AC || new (window.AudioContext||window.webkitAudioContext)();
-    if(AC.state==='suspended') AC.resume();
-    beep();
-  }
-};
-function beep(){
-  if(!soundOn || !AC) return;
-  const o=AC.createOscillator(), g=AC.createGain();
-  o.type='square'; o.frequency.value=880;
-  g.gain.setValueAtTime(.0001,AC.currentTime);
-  g.gain.exponentialRampToValueAtTime(.09,AC.currentTime+.01);
-  g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+.22);
-  o.connect(g).connect(AC.destination); o.start(); o.stop(AC.currentTime+.24);
+/* ── 설정 패널 / 알림음 ────────────────────────────────────────────
+   알림음 on/off 를 상단 바 "설정" 드롭다운 안에서 켜고 끈다. 선택은
+   localStorage 에 저장해서 새로고침해도 유지된다. 다만 브라우저
+   자동재생 정책 때문에 실제 소리는 사용자 제스처(클릭) 없이는 절대
+   안 풀린다 — 그래서 이전 방문 때 켜둔 상태로 새로고침해 들어오면,
+   페이지 아무 데나 처음 한 번 클릭하는 순간 조용히 풀어준다. */
+const settingsBtn   = document.getElementById('settings-btn');
+const settingsPanel = document.getElementById('settings-panel');
+
+// 감지 on/off — 상단 바의 독립 버튼. Jetson 장비 자체는 못 끄니, 우리 쪽
+// MQTT 수신을 끊는 걸로 흉내낸다. mqtt_worker.py 가 1초 안에 반영해서
+// 연결을 끊거나 다시 붙는다. 영상은 브라우저가 Jetson 에 직접 붙는
+// 거라 이 스위치와 무관하게 계속 나온다.
+const detectToggleBtn = document.getElementById('detect-toggle-btn');
+
+function setDetectToggleBtn(enabled){
+  detectToggleBtn.dataset.enabled = enabled ? '1' : '0';
+  detectToggleBtn.classList.toggle('on', enabled);
+  detectToggleBtn.textContent = enabled ? '감지 켜짐' : '감지 꺼짐';
 }
 
-/* ── 경보 상태 ──────────────────────────────────────────────────── */
-const AL = {
-  box:  document.getElementById('alert'),
-  sig:  document.getElementById('alert-sig'),
-  msg:  document.getElementById('alert-msg'),
-  sub:  document.getElementById('alert-sub'),
-  time: document.getElementById('alert-time'),
+detectToggleBtn.onclick = async () => {
+  const next = detectToggleBtn.dataset.enabled !== '1';   // 지금 상태의 반대로
+  const res = await fetch('/api/toggle_detection/', {
+    method: 'POST',
+    body: new URLSearchParams({enabled: next ? '1' : '0'}),
+    headers: {'X-CSRFToken': CSRF},
+  });
+  if(res.status === 302 || res.redirected){ location.href = '/admin/login/?next=/'; return; }
+  const d = await res.json();
+  if(d.ok) setDetectToggleBtn(d.detection_enabled);
+  poll();   // 감지 상태 배지도 같이 반영
 };
-const HOLD = 8000;               // 감지 후 이 시간 지나면 평시로 복귀
-let lastFire = 0, lastEventKey = null, prevCounts = {};
 
-function fireAlert(camIdx, count, at){
-  const L    = camLabel[camIdx] || '?';
-  const zone = camZone[camIdx];
-  AL.box.dataset.state = 'alert';
-  AL.sig.textContent = L;
-  AL.msg.textContent = zone
-    ? `CAM - ${L} · ${zone}에서 인원이 감지되었습니다`
-    : `CAM - ${L} 에서 인원이 감지되었습니다`;
-  AL.sub.textContent = count > 1
-    ? `해당 구역 감지 인원 ${count}명 · 즉시 확인 요망`
-    : '해당 구역 감지 인원 1명 · 즉시 확인 요망';
-  AL.time.textContent = at;
-  lastFire = Date.now();
-  beep();
+const sndToggle      = document.getElementById('snd-toggle');
+let soundOn   = localStorage.getItem('alarmSound') === '1';
+let sndVolume = Number(localStorage.getItem('alarmVolume')) || 45;   // 0~100
+
+function refreshSndUI(){
+  sndToggle.checked = soundOn;
 }
-function calmAlert(running, totalNow){
-  if(Date.now() - lastFire < HOLD) return;      // 최근 경보는 유지
-  if(!running){
-    AL.box.dataset.state = 'standby';
-    AL.sig.textContent = '—';
-    AL.msg.textContent = '감시 대기';
-    AL.sub.textContent = '시작을 누르면 감시를 시작한다.';
-    return;
+
+const sndVolumeEl  = document.getElementById('snd-volume');
+const sndVolumeVal = document.getElementById('snd-volume-val');
+sndVolumeEl.value = sndVolume;
+sndVolumeVal.textContent = sndVolume + '%';
+sndVolumeEl.oninput = () => {
+  sndVolume = Number(sndVolumeEl.value);
+  sndVolumeVal.textContent = sndVolume + '%';
+  localStorage.setItem('alarmVolume', String(sndVolume));
+};
+
+// 테스트 버튼은 "알림음" 마스터 스위치가 꺼져 있어도 항상 눌리고 항상
+// 소리가 난다 — 미리 들어보는 용도라 켜야만 눌리게 해두면 아무 반응이
+// 없는 것처럼 보인다(실제로 이 버튼들이 꺼짐 상태에선 disabled 로 막혀
+// 있어서 "소리가 아예 안 난다"는 문제의 진짜 원인이었다).
+document.getElementById('snd-test-chime').onclick = () => speakChime();
+document.getElementById('snd-test-warn').onclick  = () => speakWarning();
+
+settingsBtn.onclick = (ev) => {
+  ev.stopPropagation();
+  const opening = settingsPanel.hidden;
+  settingsPanel.hidden = !opening;
+  settingsBtn.setAttribute('aria-expanded', String(opening));
+};
+document.addEventListener('click', (ev) => {
+  if(!settingsPanel.hidden && !settingsPanel.contains(ev.target) && ev.target !== settingsBtn){
+    settingsPanel.hidden = true;
+    settingsBtn.setAttribute('aria-expanded', 'false');
   }
-  AL.box.dataset.state = 'idle';
-  AL.sig.textContent = 'OK';
-  AL.msg.textContent = '정상 감시 중 — 감지된 인원 없음';
-  AL.sub.textContent = `카메라 ${Object.keys(camLabel).length}대 정상 수신`;
+});
+
+sndToggle.onchange = function(){
+  soundOn = this.checked;
+  localStorage.setItem('alarmSound', soundOn ? '1' : '0');
+  refreshSndUI();
+  if(soundOn) speakChime();
+};
+refreshSndUI();
+
+/* ── 알림음 두 가지 ────────────────────────────────────────────────
+   둘 다 톤이 아니라 실제 음성으로 말해준다 — 화면을 안 보고 있어도
+   무슨 상황인지 바로 알 수 있게. 브라우저 내장 음성합성(Web Speech
+   API)이라 별도 음원 파일이 필요 없다. A 카메라에서 등록된 인물로
+   확인되면 "등록완료", B·C·D 에서 미등록자가 확인되면 "미등록자 감지"
+   를 한 번만 말한다. 동시에 여러 카메라에서 겹치면 브라우저가 알아서
+   순서대로 큐에 쌓아 이어 말한다(하나가 다른 걸 끊지 않는다).
+   speakChime/speakWarning 은 소리 자체(설정 패널 "테스트" 버튼이 마스터
+   스위치와 무관하게 항상 미리 들어볼 수 있게 쓴다) 이고, playChime/
+   playWarning 은 실제 감지 때만 쓰는, soundOn(알림음 마스터 스위치)을
+   먼저 확인하는 버전이다. */
+function speak(text){
+  if(!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'ko-KR';
+  u.rate = 1.05;
+  u.volume = Math.min(1, sndVolume / 100);
+  speechSynthesis.speak(u);
+}
+function speakChime(){ speak('등록완료'); }
+function speakWarning(){ speak('미등록자 감지'); }
+
+function playChime(){ if(soundOn) speakChime(); }
+function playWarning(){ if(soundOn) speakWarning(); }
+
+/* ── 카메라별 경보 상태 ────────────────────────────────────────────
+   예전엔 화면 상단에 별도 스트립을 두고 "가장 최근 이벤트 1개"만
+   보여줬는데, 그러면 B가 확인중인 동안 D가 감지돼도 화면에 안 잡혔다.
+   지금은 카메라별로 상태(checking/registered/alert)를 따로 들고
+   있다가 각 카메라 출력창(.cam) 테두리·pill 을 직접 바꾼다 — 그래서
+   여러 대가 동시에 감지돼도 전부 실시간으로 보인다. 미등록자가 확인된
+   카메라는 상단 바에도 "CAM X 미등록 인물 감지" 로 따로 알려준다.
+   등록 여부는 진입 이벤트에 같이 오는 person.confirmed 로 판단한다
+   (관리자가 검수 완료한 인물). */
+const CHECK_MS = 3000;            // 신원 확인 중으로 보여주는 시간
+const HOLD_MS  = 8000;            // 결과(등록/미등록) 표시 후 정상으로 복귀하는 시간
+const camState   = new Map();     // camIdx → 'checking' | 'registered' | 'alert'
+const camTimers  = new Map();     // camIdx → {check, hold}
+const seenEventKeys = new Set();  // 이미 처리한 이벤트 — 폴링마다 새 것만 골라낸다
+let initialized = false;          // 첫 poll 의 기존 이벤트는 재생하지 않는다
+let prevCounts = {};
+
+function clearCamTimers(camIdx){
+  const t = camTimers.get(camIdx);
+  if(t){
+    if(t.check) clearTimeout(t.check);
+    if(t.hold)  clearTimeout(t.hold);
+  }
+  camTimers.set(camIdx, {});
+}
+
+// 카메라 한 대의 출력창(테두리·브래킷·pill)을 지금 상태에 맞게 그린다.
+function applyCamVisual(camIdx, countN){
+  const fig = document.querySelector(`.cam[data-cam="${camIdx}"]`);
+  if(!fig) return;
+  const pill = fig.querySelector('.pill');
+  const state = camState.get(camIdx);
+  fig.classList.remove('st-checking', 'st-registered', 'st-alert');
+  fig.classList.toggle('hot', !!countN && !state);
+  if(state){
+    fig.classList.add('st-' + state);
+    if(pill) pill.textContent =
+      state === 'checking' ? '확인중' : state === 'registered' ? '등록됨' : '미등록';
+  } else if(pill){
+    pill.textContent = countN ? `감지 ${countN}` : '정상';
+  }
+}
+
+// 상단 바의 "CAM X 미등록 인물 감지" — 지금 미등록 상태인 카메라를 전부 보여준다.
+function refreshTopNote(){
+  const alerting = [...camState.entries()]
+    .filter(([, s]) => s === 'alert')
+    .map(([idx]) => camLabel[idx] || '?');
+  document.getElementById('alert-note').textContent =
+    alerting.length ? `| CAM ${alerting.join(', ')} 미등록 인물 감지` : '';
+}
+
+// "감지 상태" 배지 — Jetson 장비 자체는 원격으로 켜고 끌 방법이 없이 항상
+// 자체적으로 감시 중이라("감시 시작/정지" 버튼을 지운 이유와 같다),
+// "감지중"의 의미를 "카메라 화면에 방금 뭔가 잡혔는지" 가 아니라 "MQTT 가
+// 연결돼서 실제로 감시가 되고 있는지" 로 잡았다. 설정에서 "감지 활성화"를
+// 끄면 우리 쪽에서 일부러 연결을 끊는 거라 "감지 꺼짐"(의도적)으로,
+// 켜져 있는데 연결만 끊긴 거면 "연결 끊김"(문제 상황)으로 구분해서
+// 보여준다. 카메라별 확인중/등록/미등록 색상과 소리는 이것과 별개로
+// camState 로 계속 처리한다.
+function refreshDetectPill(mqttConnected, detectionEnabled){
+  const el = document.getElementById('detect-pill');
+  const active = detectionEnabled !== false && mqttConnected;
+  el.textContent = detectionEnabled === false ? '감지 꺼짐'
+                  : mqttConnected ? '감지중' : '연결 끊김';
+  el.classList.toggle('active', active);
+}
+
+// 진입 이벤트 발생 — 그 카메라만 확인중(주황)으로 전환, CHECK_MS 뒤
+// 결과 판정. 같은 카메라에서 또 감지되면 진행 중이던 사이클을 새로
+// 시작한다. 다른 카메라는 각자의 사이클을 그대로 유지한다.
+// 소리는 결과가 나온 시점에 딱 한 번만 울린다 — A 에서 등록 확인되면
+// "띠로링" 차임(HOLD_MS 동안 반복), B·C·D 에서 미등록으로 확인되면
+// 음성으로 "미등록자 감지" 한 번만 말한다(예전엔 반복해서 여러 번
+// 말했는데 시끄럽다는 피드백으로 1회로 줄였다). 그 외 조합(A 미등록,
+// B·C·D 등록)은 화면 색만 바뀌고 소리는 안 낸다.
+function startChecking(camIdx, confirmed){
+  clearCamTimers(camIdx);
+  camState.set(camIdx, 'checking');
+  applyCamVisual(camIdx, prevCounts[camIdx]);
+  refreshTopNote();
+  const check = setTimeout(() => {
+    camState.set(camIdx, confirmed ? 'registered' : 'alert');
+    applyCamVisual(camIdx, prevCounts[camIdx]);
+    refreshTopNote();
+    const L = camLabel[camIdx];
+    if(confirmed && L === 'A') playChime();       // 크게 한 번만 울린다
+    else if(!confirmed && (L === 'B' || L === 'C' || L === 'D')) playWarning();
+    const hold = setTimeout(() => {
+      camState.delete(camIdx);
+      applyCamVisual(camIdx, prevCounts[camIdx]);
+      refreshTopNote();
+    }, HOLD_MS);
+    camTimers.set(camIdx, {...camTimers.get(camIdx), hold});
+  }, CHECK_MS);
+  camTimers.set(camIdx, {check});
+}
+
+// 카메라별 감지 횟수 — 명단(roster)이 비어 있어도 항상 보인다. 알고
+// 있는 카메라(camLabel) 전부를 A/B/C/D 순으로 나열하고, 오늘 기록이
+// 없는 카메라는 0으로 표시한다.
+function renderCamCounts(counts){
+  const el = document.getElementById('cam-counts');
+  const c = counts || {};
+  const idxs = Object.keys(camLabel).sort(
+    (a, b) => (camLabel[a] || '').localeCompare(camLabel[b] || ''));
+  el.innerHTML = idxs.map(idx => {
+    const n = c[idx] ? c[idx].count : 0;
+    return `<span class="item"><b>${esc(camLabel[idx])}</b><span class="n">${n}회</span></span>`;
+  }).join('');
 }
 
 /* ── 인물 카드 ──────────────────────────────────────────────────── */
@@ -416,48 +619,38 @@ function render(d){
   document.getElementById('m-now').textContent   = d.totals.now;
   document.getElementById('m-total').textContent = d.totals.people;
   document.getElementById('m-cams').textContent  = d.totals.cameras;
-  document.getElementById('m-mqtt').textContent  = d.mqtt_connected ? '연결됨' : '끊김';
   document.getElementById('h-people').textContent = d.gallery.length + '명';
+  renderCamCounts(d.camera_counts);
+  refreshDetectPill(d.mqtt_connected, d.detection_enabled);
+  setDetectToggleBtn(d.detection_enabled);
 
-  // 카메라별 현재 인원 — live_tracks 를 카메라 인덱스로 묶는다
+  // 카메라별 현재 인원 — live_tracks 를 카메라 인덱스로 묶는다 (로컬 파이프라인용,
+  // jetson MQTT 인원은 여기 안 잡히고 아래 진입 이벤트 쪽에서 처리한다)
   const counts = {};
   (d.live_tracks || []).forEach(t=>{
     counts[t.cam] = (counts[t.cam] || 0) + 1;
   });
-
-  let firedCam = null, firedCount = 0;
-  document.querySelectorAll('.cam-map .cell').forEach(cell=>{
-    const idx = cell.dataset.cam, n = counts[idx] || 0;
-    const was = prevCounts[idx] || 0;
-    cell.classList.toggle('hot', n > 0);
-    cell.classList.toggle('live', d.running);
-    if(n > 0 && was === 0){ firedCam = idx; firedCount = n; }
+  document.querySelectorAll('.cam[data-cam]').forEach(fig=>{
+    const idx = fig.dataset.cam, n = counts[idx] || 0;
     prevCounts[idx] = n;
-
-    const fig  = document.querySelector(`.cam[data-cam="${idx}"]`);
-    const pill = document.querySelector(`[data-pill="${idx}"]`);
-    if(fig)  fig.classList.toggle('hot', n > 0);
-    if(pill) pill.textContent = n > 0 ? `감지 ${n}` : '정상';
+    applyCamVisual(idx, n);
   });
 
-  // 파이프라인이 아직 live_tracks 를 안 채워도, 진입 이벤트로도 경보가 뜬다
-  // (jetson MQTT 로 들어온 입장 이벤트가 여기 해당한다)
-  const top = (d.events || [])[0];
-  if(top){
-    const key = `${top.at}|${top.person}|${top.cam}|${top.kind}`;
-    if(key !== lastEventKey){
-      if(lastEventKey !== null && top.kind === '진입' && firedCam === null){
-        const idx = CAM_MAP[top.cam];
-        if(idx !== undefined) fireAlert(String(idx), counts[idx] || 1, top.at);
-      }
-      lastEventKey = key;
+  // 새 진입(입장) 이벤트가 오면 해당 카메라를 확인중(주황)으로 올린다.
+  // 이벤트 목록 전체(최근 12건)를 훑어서 처음 보는 것만 처리하므로,
+  // 같은 폴링 간격 안에 여러 카메라에서 동시에 감지돼도 전부 잡힌다.
+  // 오래된 것부터 순서대로 처리하려고 뒤집어서 돈다. 최초 로드 시
+  // 이미 쌓여 있던 과거 이벤트는 재생하지 않는다(initialized 가드).
+  (d.events || []).slice().reverse().forEach(e => {
+    const key = `${e.at}|${e.person}|${e.cam}|${e.kind}`;
+    if(seenEventKeys.has(key)) return;
+    seenEventKeys.add(key);
+    if(initialized && e.kind === '진입'){
+      const idx = CAM_MAP[e.cam];
+      if(idx !== undefined) startChecking(String(idx), !!e.confirmed);
     }
-  }
-  if(firedCam !== null){
-    fireAlert(firedCam, firedCount, new Date().toTimeString().slice(0,8));
-  }else{
-    calmAlert(d.running, d.totals.now);
-  }
+  });
+  initialized = true;
 
   const r = document.getElementById('roster');
   r.innerHTML = d.gallery.length
@@ -478,18 +671,39 @@ async function poll(){
   try{ render(await (await fetch('/api/state/')).json()); }
   catch(e){
     document.getElementById('rec').className = 'rec off';
-    AL.box.dataset.state = 'standby';
-    AL.msg.textContent = '상태 수신 끊김';
-    AL.sub.textContent = '서버 응답이 없다. 워커와 대시보드가 떠 있는지 확인해라.';
-    AL.sig.textContent = '—';
+    refreshDetectPill(false);   // 대시보드 서버 자체가 응답 없으면 당연히 연결 끊김
   }
 }
 poll(); setInterval(poll, 1000);
 
-// 벽시계
+function renderStats(d){
+  const set = (id, v) => { document.getElementById(id).textContent = v; };
+  set('st-week-r',  d.week.registered);   set('st-week-u',  d.week.unregistered);   set('st-week-t',  d.week.total);
+  set('st-2w-r',    d.two_weeks.registered); set('st-2w-u', d.two_weeks.unregistered); set('st-2w-t', d.two_weeks.total);
+  set('st-month-r', d.month.registered);  set('st-month-u', d.month.unregistered);  set('st-month-t', d.month.total);
+}
+async function pollStats(){
+  try{ renderStats(await (await fetch('/api/stats/')).json()); }
+  catch(e){ /* 상태 폴링(poll)이 이미 끊김 표시를 하므로 여기선 조용히 넘어간다 */ }
+}
+pollStats(); setInterval(pollStats, 30000);   // 자주 안 바뀌는 값이라 30초마다
+
+// B의 중앙서버(central_tracking.db) 연동 상태 — CENTRAL_DB_PATH 가 아직
+// 안 채워져 있으면 "연동 안 됨" 으로 조용히 표시된다.
+async function pollCentral(){
+  try{
+    const d = await (await fetch('/api/central/')).json();
+    const el = document.getElementById('central-status-val');
+    el.textContent = d.available
+      ? `연동됨 · journey ${d.counts.journeys ?? 0}건`
+      : '연동 안 됨';
+  }catch(e){ /* 조용히 무시 — 상태 폴링이 이미 끊김을 알려준다 */ }
+}
+pollCentral(); setInterval(pollCentral, 30000);
+
+// 벽시계 — 예전엔 경보 스트립 안에 있었는데, 상단 바의 "설정" 오른쪽으로 옮겼다.
 setInterval(()=>{
-  if(AL.box.dataset.state !== 'alert')
-    AL.time.textContent = new Date().toTimeString().slice(0,8);
+  document.getElementById('wall-clock').textContent = new Date().toTimeString().slice(0,8);
 }, 1000);
 
 // MJPEG 는 끝나지 않는 응답이라 load 이벤트를 막는다. 로드 완료 후에 붙인다.

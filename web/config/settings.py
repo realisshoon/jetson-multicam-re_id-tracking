@@ -10,20 +10,33 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-change-me")
 DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
 
-# Jetson IP로 접속하므로 열어둠. 외부 노출 시 반드시 좁힐 것.
-ALLOWED_HOSTS = ["*"]
+# @login_required 가 로그인 안 된 사용자를 여기로 보낸다. 기본값(/accounts/login/)은
+# 이 프로젝트에 없는 경로라 404가 났었다 — admin 로그인 페이지로 보내도록 지정.
+LOGIN_URL = "/admin/login/"
+
+# 이 서버(대시보드) 자신이 응답할 주소 목록 — 접속하는 사람들의 IP가 아니라
+# 이 PC 자신의 IP/호스트명이다. 기본값은 지금 확인된 이 PC의 LAN IP.
+# 네트워크가 바뀌면 DJANGO_ALLOWED_HOSTS 환경변수로 덮어쓰면 된다.
+ALLOWED_HOSTS = [
+    h for h in os.environ.get(
+        "DJANGO_ALLOWED_HOSTS", "10.10.20.26,localhost,127.0.0.1"
+    ).split(",") if h
+]
 CSRF_TRUSTED_ORIGINS = [
     o for o in os.environ.get("DJANGO_CSRF_ORIGINS", "").split(",") if o
 ]
 
 INSTALLED_APPS = [
+    # tracking 이 admin 보다 먼저 와야 tracking/templates/admin/ 의
+    # 커스텀 템플릿(admin/base_site.html 등)이 admin 기본 템플릿보다
+    # 우선 선택된다 (Django 템플릿 조회는 INSTALLED_APPS 순서를 따름).
+    "tracking",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "tracking",
 ]
 
 MIDDLEWARE = [
@@ -100,21 +113,31 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 # 산출물(MQTT cctv/entry 토픽, node_a/node_b 의 MJPEG 스트림)만 읽는다.
 # src/network/mqtt_client.py 의 기본값과 동일한 호스트/포트/토픽.
 JETSON = {
-    "MQTT_HOST": os.environ.get("JETSON_MQTT_HOST", "127.0.0.1"),
+    # 10.10.20.56 = 실제 YOLO+ByteTrack+Re-ID+MQTT 파이프라인이 도는 Jetson 장비.
+    "MQTT_HOST": os.environ.get("JETSON_MQTT_HOST", "10.10.20.56"),
     "MQTT_PORT": int(os.environ.get("JETSON_MQTT_PORT", "1883")),
     "MQTT_TOPIC": os.environ.get("JETSON_MQTT_TOPIC", "cctv/entry"),
     # node_a.py / node_b.py 가 각각 :8000 / :8001 에서 직접 서빙하는 스트림.
     "CAM_A_STREAM_URL": os.environ.get(
-        "JETSON_CAM_A_URL", "http://127.0.0.1:8000/stream"),
+        "JETSON_CAM_A_URL", "http://10.10.20.56:8000/stream"),
     "CAM_B_STREAM_URL": os.environ.get(
-        "JETSON_CAM_B_URL", "http://127.0.0.1:8001/stream"),
+        "JETSON_CAM_B_URL", "http://10.10.20.56:8001/stream"),
     # Camera C 는 아직 가동 전이라 기본값을 비워둔다 — 대시보드가 빈 슬롯으로
     # 보여준다. 켜지면 JETSON_CAM_C_URL 환경변수로 채우면 된다.
     "CAM_C_STREAM_URL": os.environ.get("JETSON_CAM_C_URL", ""),
     # Camera D 는 node_a/b 와 같은 장비의 :8002 에서 서빙 중.
     "CAM_D_STREAM_URL": os.environ.get(
-        "JETSON_CAM_D_URL", "http://127.0.0.1:8002/stream"),
+        "JETSON_CAM_D_URL", "http://10.10.20.56:8002/stream"),
 }
+
+# B의 중앙서버(feature/journey-sqlite-e2e 브랜치의 journey_sqlite_server.py 가
+# MQTT cctv/# 를 구독해 쌓는 central_tracking.db)를 읽기 전용으로 연동한다.
+# 그 파일이 실제로 어느 장비의 어느 경로에 있는지는 아직 확정되지 않았다 —
+# 확정되면 CENTRAL_DB_PATH 환경변수로 채우면 바로 연동된다(비어있으면
+# tracking.central_db 의 모든 조회 함수가 조용히 빈 결과를 돌려준다).
+# 이 DB 는 절대 쓰지 않고 읽기만 한다 — 다른 프로세스(journey_sqlite_server.py)
+# 가 계속 쓰고 있는 파일이라 동시 쓰기는 손상 위험이 있다.
+CENTRAL_DB_PATH = os.environ.get("CENTRAL_DB_PATH", "")
 
 TRACKER = {
     # tracker_worker 가 참고하는 기본값. Camera 모델이 우선한다.

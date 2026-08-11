@@ -4,15 +4,30 @@ from django.utils import timezone
 
 
 class Camera(models.Model):
-    """(C) 웹에서 카메라를 추가/편집하면 tracker 가 reload_cameras 로 반영한다."""
+    """(C) 웹에서 카메라를 추가/편집하면 tracker 가 reload_cameras 로 반영한다.
+
+    Jetson 보드가 여러 대(팀 계획상 총 4대, 각자 다른 IP)라 카메라마다
+    자기 IP를 따로 들고 있는다 — jetson_host 를 채우면 대시보드가 그
+    주소의 MJPEG 스트림을 바로 embed 하고(Django 를 거치지 않는다),
+    비워두면 이 PC에 연결된 로컬 소스(source 필드)로 보고 내부 프록시를
+    쓴다. mqtt_ingest.py 가 MQTT 로 처음 들어온 노드를 자동으로 카메라
+    행으로 만들어주기도 하는데, 그때는 jetson_host 가 비어있으니 이
+    관리자 화면에서 채워 넣어야 영상이 뜬다."""
     name    = models.CharField("이름", max_length=50)
     source  = models.CharField(
-        "소스", max_length=300,
-        help_text="/dev/video0 또는 rtsp://... 또는 파일 경로")
+        "소스", max_length=300, blank=True,
+        help_text="로컬 카메라만 씀: /dev/video0 또는 rtsp://... 또는 파일 경로")
     index   = models.IntegerField("스트림 번호", unique=True,
                                   help_text="/video/<번호> URL 에 쓰임")
     enabled = models.BooleanField("사용", default=True)
     note    = models.CharField("메모", max_length=200, blank=True)
+
+    jetson_host = models.CharField(
+        "Jetson IP", max_length=100, blank=True,
+        help_text="이 카메라가 연결된 Jetson 보드 주소. 비워두면 로컬 카메라로 취급.")
+    jetson_port = models.IntegerField(
+        "Jetson 포트", null=True, blank=True, default=8000,
+        help_text="그 보드에서 이 카메라 영상을 서빙하는 포트 (예: 8000)")
 
     class Meta:
         verbose_name = verbose_name_plural = "카메라"
@@ -142,6 +157,24 @@ class RuntimeConfig(models.Model):
     max_gallery    = models.IntegerField("인물당 갤러리 최대", default=5)
     draw_boxes     = models.BooleanField("박스 표시", default=True)
     draw_labels    = models.BooleanField("ID 표시", default=True)
+
+    # MQTT 브로커 접속 정보 — 예전엔 config/settings.py 에 박혀 있어서(환경변수로만
+    # 오버라이드 가능) 주소가 바뀌면 서버를 껐다 켜야 했다. 이제 여기 저장해서
+    # Django admin 에서 바로 바꿀 수 있고, mqtt_worker.py 가 주기적으로 이 값을
+    # 확인해서 바뀌면 알아서 재연결한다. (카메라별 영상 주소는 이제 여기가 아니라
+    # Camera.jetson_host/jetson_port 에 — 보드가 여러 대라 카메라마다 다르다.)
+    jetson_host       = models.CharField("MQTT 브로커 IP", max_length=100,
+                                         default="10.10.20.56")
+    jetson_mqtt_port  = models.IntegerField("MQTT 포트", default=1883)
+
+    # Jetson 장비 자체(카메라 캡처·YOLO·Re-ID)는 원격으로 켜고 끌 방법이
+    # 없다 — 그쪽은 항상 자체적으로 돈다. 대신 "감지 on/off"는 우리 쪽
+    # MQTT 수신을 끊는 걸로 흉내낸다: 꺼두면 mqtt_worker.py 가 브로커
+    # 연결을 끊어서 새 감지 이벤트를 아예 받지도 처리하지도 않는다(알림/
+    # 소리/기록 전부 멈춘다). 영상은 브라우저가 Jetson 에 직접 붙는
+    # 거라 이 스위치와 무관하게 계속 나온다.
+    detection_enabled = models.BooleanField("감지 활성화", default=True)
+
     updated_at     = models.DateTimeField(auto_now=True)
 
     class Meta:

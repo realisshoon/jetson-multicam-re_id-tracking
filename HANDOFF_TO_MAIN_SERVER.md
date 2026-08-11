@@ -1,285 +1,226 @@
-# reid-admin-web → 메인 서버(B) 인계 문서
+# reid-admin-web → 메인 서버(B) API 연동 요청
 
-작성 시점: 2026-08-06. C(Django/웹) 담당자가 B(메인 서버) 담당자에게 현재
-상태를 전달하기 위한 문서. 최종 구조 확정 내용(MAIN 서버 = 10.10.20.33,
-central_tracking.db, journey_sqlite_server.py)에 맞춰 이후 변경할 부분을
-명시했다.
-
----
-
-## 1. 지금 이 코드가 뭘 하고 있는지 (요약)
-
-Django 대시보드 1개 + 백그라운드 워커 2개, 이렇게 3개 프로세스로 돈다.
-
-```
-tracker_worker.py   로컬 카메라 파이프라인 (지금은 미사용/placeholder)
-mqtt_worker.py       jetson A보드 MQTT 를 직접 구독 → 이 PC의 SQLite 에 저장
-                      ⚠ 최종 구조에서는 이 프로세스가 없어지고, Django 가
-                        central_tracking.db 또는 메인 서버 API 를 읽는
-                        구조로 바뀔 예정 (8번 항목 참고)
-daphne (Django)       위 DB 를 읽어서 웹 화면 렌더링
-```
-
-디렉토리: `D:\20260728\reid-admin-web\` (jetson 리포와는 완전히 분리된
-별도 디렉토리 — jetson 쪽 코드는 일절 수정하지 않음)
+작성 시점: 2026-08-10. C(Django/웹) 담당자가 B(메인 서버) 담당자에게, 대시보드가
+API로 어떤 데이터를 받아야 하는지 정리해서 전달하는 문서. 8/6 작성했던 이전
+버전은 경로·프로토콜이 다 바뀌어서 이 문서로 대체한다.
 
 ---
 
-## 2. Django 전체 코드
+## 1. 지금 상태 (요약)
 
-리포 루트: `D:\20260728\reid-admin-web\web\`
-
-```
-web/
-├── manage.py
-├── run_dev.sh                      (Linux/Mac용, Windows에선 daphne 직접 실행)
-├── tracker_worker.py               로컬 카메라 파이프라인 워커
-├── mqtt_worker.py                  jetson MQTT 구독 워커 ⚠ 최종엔 대체 예정
-├── requirements-web.txt
-├── README_WEB.md                   전체 아키텍처 설명 문서
-├── config/
-│   ├── settings.py                 환경변수·DB·JETSON 연동 설정
-│   ├── urls.py
-│   └── asgi.py / wsgi.py
-└── tracking/                       Django 앱 본체
-    ├── models.py                   DB 스키마 (아래 3번)
-    ├── views.py                    화면 렌더링 + API
-    ├── urls.py
-    ├── admin.py                    /admin/ 관리 화면
-    ├── bus.py                      Django ↔ 워커 프로세스 간 상태 전달(Redis/파일)
-    ├── mqtt_ingest.py              MQTT 페이로드 → DB 저장 로직 (아래 6번)
-    ├── services.py                 인물 병합/분리 로직
-    ├── management/commands/seed_demo.py   더미 데이터 생성용(현재 안 씀)
-    └── templates/tracking/dashboard.html  화면 전체(HTML+CSS+JS 한 파일)
-```
-
-전체 코드는 `D:\20260728\reid-admin-web\reid-admin-web-handoff.zip` 로
-압축해 두었다 (`.venv`, `db.sqlite3`, `media/`, `staticfiles/`, `__pycache__`
-제외). 이 zip 을 그대로 전달하면 된다.
+- 대시보드 리포: `jetson-multicam-re_id-tracking` 의 `reid-admin-web` 브랜치
+  (`web/` 디렉토리). jetson 쪽 코드(`src/`, `configs/` 등)는 절대 안 건드림.
+- 지금은 Django가 **Jetson A보드(10.10.20.56)의 MQTT를 직접 구독**해서
+  자체 SQLite에 저장하는 임시 구성으로 돌아간다 (`mqtt_worker.py` +
+  `tracking/mqtt_ingest.py`, 토픽 `cctv/entry`, 필드 `global_person_id` 기준 —
+  **이건 구 프로토콜이고, B의 메인 서버 브랜치(`release/multinode-baseline`)를
+  보니 이미 다른 스키마로 바뀌어 있었다.** 아래 3번 참고.
+- 결론(8/6에 이미 정함, 유지): **central_tracking.db를 Django가 직접 열지
+  않는다.** SQLite는 네트워크 파일 공유가 없으면 원격 PC에서 못 열고, 연다 해도
+  `journey_sqlite_server.py`의 동시 쓰기와 부딪힐 위험이 있다. **B가 API를
+  열고 Django가 그걸 호출하는 방식**으로 간다.
 
 ---
 
-## 3. Django Model (`tracking/models.py`)
+## 2. 대시보드가 실제로 화면에서 쓰는 데이터 (기능별)
 
-| 모델 | 용도 | 주요 필드 |
-|---|---|---|
-| `Camera` | 카메라 1대 | `index`(unique, 900+ 는 jetson 전용 예약), `name`, `source`, `enabled` |
-| `Person` | 사람 1명(Global ID) | `external_id`(jetson 의 `global_person_id`, 예: `G000001`, unique), `label`(이름), `created_at`, `last_seen`, `is_active`, `confirmed` |
-| `Tracklet` | 카메라 1대에서의 궤적 1개 | `person`(FK), `camera`(FK), `local_id`(ByteTrack local id), `start_at`, `end_at`, `frames` |
-| `Snapshot` | 크롭 이미지 + Re-ID 임베딩 | `person`(FK), `tracklet`(FK, null 가능), `image`(선택), `embedding`(512-d, BinaryField), `score` |
-| `Event` | 타임라인 이벤트 | `person`(FK), `camera`(FK), `kind`(enter/exit/merge/split), `at`, `detail` |
-| `RuntimeConfig` | 파이프라인 파라미터(싱글톤) | `det_conf`, `reid_threshold`, `max_gallery`, `draw_boxes`, `draw_labels` |
+B가 API를 설계할 때 "이 화면 기능에 이 데이터가 필요하다"를 바로 알 수 있게
+기능 단위로 정리했다. (`web/tracking/templates/tracking/dashboard.html`,
+`web/tracking/views.py` 의 `api_state()` 기준)
 
-DB: SQLite, WAL 모드 필수(`config/settings.py` 의 `DATABASES` 에 이미 설정됨,
-여러 프로세스가 동시에 쓰기 때문).
+| 화면 기능 | 필요한 데이터 |
+|---|---|
+| 카메라 월 A/B/C/D 영상 | (API 무관) 각 Jetson 보드가 직접 서빙하는 MJPEG URL — `Camera.jetson_host`/`jetson_port`로 Django admin에서 보드별로 이미 지정 가능하게 해둠 |
+| 카메라 테두리 색(확인중/등록됨/미등록) + 알림음 | 카메라별 **최근 진입 이벤트**와, 그 사람이 **등록(확인)된 인물인지 아닌지** 플래그 — 이게 제일 중요한 실시간 데이터 |
+| 상단 "CAM X 미등록 인물 감지" 문구 | 위와 동일한 이벤트에서 파생 |
+| "감지 상태" 배지(빨강/검정) | 메인 서버·MQTT 연결이 살아있는지 여부 (헬스체크성) |
+| 감지 인물 패널(카드 목록) | 인물별: id, 이름(있으면), 등록 여부, 대표 썸네일, **어느 카메라들에서 잡혔는지**, 마지막 감지 시각 |
+| 감지 인물 패널 상단 "카메라별 인식 횟수" | 카메라별로 오늘 몇 번 진입 이벤트가 있었는지 카운트 |
+| 이벤트 기록(로그) | 시각, 인물, 카메라, 종류(진입 등) — 최근 N건 |
+| 인원 통계(7일/14일/30일) | 기간별 등록/미등록/총 인원 수 |
+| **(신규 요청) journey_id-person_id 매칭 횟수** | 아래 4번 참고 — 아직 스키마 확인이 안 돼서 구체적인 필드를 못 정했다 |
 
----
-
-## 4. 현재 화면(대시보드)에서 실제로 쓰는 필드
-
-`/api/state/` (1초 폴링) 응답 기준 — `tracking/views.py` 의 `api_state()`:
+지금 `/api/state/` 가 실제로 내려주는 모양(로컬 구현 기준, 참고용):
 
 ```json
 {
-  "running": false,              // 로컬 파이프라인 가동 여부
-  "fps": 0.0,                    // 로컬 파이프라인 FPS
-  "mqtt_connected": true,        // jetson MQTT 연결 상태
-  "jetson_entries_total": 3,     // MQTT 로 받은 누적 입장 수
-  "live_tracks": [],
-  "totals": { "people": 3, "now": 0, "cameras": 0 },
-  "gallery": [                   // 인물 카드 목록
+  "mqtt_connected": true,
+  "detection_enabled": true,
+  "jetson_entries_total": 0,
+  "totals": { "people": 0, "cameras": 4 },
+  "gallery": [
     { "id": 1, "label": "", "named": false, "confirmed": false,
       "thumb": null, "cams": ["Camera A · 입장"], "last_seen": "15:24:10" }
   ],
-  "events": [                    // 이벤트 로그
-    { "at": "15:24:10", "person": "미확인 #1", "cam": "Camera A · 입장",
-      "kind": "진입" }
+  "camera_counts": {
+    "900": { "name": "Camera A · 입장", "count": 3 }
+  },
+  "events": [
+    { "at": "15:24:10", "person": "미확인 #1", "confirmed": false,
+      "cam": "Camera A · 입장", "kind": "진입" }
   ]
 }
 ```
 
-영상은 이 API 를 안 타고, 대시보드 HTML 에 `<img src="jetson MJPEG URL">` 로
-직접 박혀 있다 (아래 7번).
-
 ---
 
-## 5. mqtt_worker.py 가 저장하는 필드 (⚠ 최종엔 이 워커 자체가 바뀜)
+## 3. 새로 확인한 프로토콜 (release/multinode-baseline 브랜치 + B 확인)
 
-`tracking/mqtt_ingest.py` 의 `ingest_entry_payload()` 가 처리하는 입력
-페이로드(현재 jetson A보드, 토픽 `cctv/entry` 기준):
+`git fetch` 로 이 브랜치를 봤을 때 우리가 지금 파싱하는 구 프로토콜과
+완전히 다른 걸 발견했고, **B에게 실제 A 진입(ENTRY) 페이로드를 받아서
+아래 내용을 확정**했다.
+
+- **브로커 주소**: `configs/mqtt.example.yaml` 기본값이 `10.10.20.33` (중앙
+  브로커). 실제로 그 IP의 1883 포트는 열려있는 것 확인함(연결은 됨, 다만
+  20초 구독해봐도 실시간 트래픽은 없었음 — 노드가 꺼져있거나 아무도 안
+  지나간 상태였을 뿐).
+- **토픽이 노드/단계별로 분리됨** (코드 기준, B 확인 필요):
+  - `cctv/events/a/entry` — A 입장
+  - `cctv/responses/a/entry` — A가 구독하는 응답 토픽 (중앙 서버가
+    `request_id`에 대응하는 식별자를 돌려주는 곳으로 추정)
+  - `cctv/events/b/passage` — B 재식별 통과
+  - `cctv/events/d/arrival` — D 도착
+  - `cctv/candidates/b`, `cctv/candidates/d` — 노드 간 후보 전달용으로 추정
+
+### A 진입(ENTRY) 페이로드 — B에게 실제로 받아서 확정함
 
 ```json
 {
-  "timestamp": "2026-08-06T10:00:00",
-  "node_id": "A",
-  "event": "ENTRY",
-  "local_track_id": 3,
-  "global_person_id": "G000001",
-  "next_nodes": ["B", "C"],
-  "reid_model": "osnet_x0_25",
-  "embedding_dim": 512,
-  "embedding": [0.01, -0.02, "..."]
+    "request_id": "...",
+    "timestamp": "...",
+    "node_id": "A",
+    "event": "ENTRY",
+    "local_track_id": 15,
+    "next_nodes": ["B", "C"],
+
+    "reid_model": "osnet_x0_25",
+    "embedding_dim": 512,
+    "embedding": [ /* 512-d, 몸통 Re-ID */ ],
+    "quality": 0.91,
+    "capture_path": "...",
+
+    "face_available": true,
+    "face_detector_model": "yunet_2023mar",
+    "face_reid_model": "sface_2021dec",
+    "face_embedding_dim": "...",
+    "face_embeddings": [ [ /* ... */ ], [ /* ... */ ], [ /* ... */ ] ],
+    "face_qualities": ["..."],
+    "face_confidences": ["..."],
+    "face_frontal_scores": ["..."],
+    "face_sharpness": ["..."],
+    "face_capture_paths": ["..."]
 }
 ```
 
-→ 저장 매핑:
-
-| MQTT 필드 | 저장되는 곳 |
-|---|---|
-| `global_person_id` | `Person.external_id` (이 값으로 중복 방지) |
-| `node_id` | `Camera` 조회/생성 (A→index 900, B→index 901) |
-| `local_track_id` | `Tracklet.local_id` |
-| `embedding`(512-d) | `Snapshot.embedding` |
-| `event != "ENTRY"` 또는 `global_person_id` 없음 | 무시 |
-| 같은 `(camera, local_id)` 재수신(MQTT 재전송) | 무시 (Event/Snapshot 중복 생성 안 함) |
-
-**B/D 토픽(`cctv/passage/b`, `cctv/completion/d`) 은 아직 파싱 로직이
-없다** — 페이로드 스키마 문서가 나오면 바로 추가 가능.
+- 예상 못 했던 부분: **얼굴 인식 데이터가 통째로 붙어 있다** — 몸통
+  Re-ID(`embedding`) 하나만 오던 구 프로토콜과 다르게, 얼굴 임베딩을
+  여러 장(`face_embeddings`) 품질 지표(`face_qualities` 등)와 함께
+  같이 보낸다.
+- **여전히 `global_person_id`/`journey_id`/`person_uid` 가 없다** — A
+  혼자만으로는 신원이 없다는 게 다시 확인됐다. 즉 4번(journey_id-person_id
+  매칭)에 필요한 식별자는 이 이벤트가 아니라 **B(재식별)/D(도착) 페이로드나
+  중앙 서버 응답 쪽에서 나올 것** — 아직 그쪽 실제 페이로드는 못 받았다.
 
 ---
 
-## 6. 영상 URL 설정 위치
+## 4. 신규 요청: journey_id ↔ person_id 매칭 횟수
 
-`web/config/settings.py` 의 `JETSON` 딕셔너리 (환경변수로 오버라이드):
+지금 대시보드에 "이 사람이 실제로 몇 번 매칭됐는지"를 보여주고 싶다는
+요청이 있었다. 근데 예전에 확인했던 `central_tracking.db` 스키마
+(`feature/journey-sqlite-e2e` 브랜치의 `journey_repository.py`)에는
+`journeys` 테이블에 `journey_id`만 있고 **`person_id`/`person_uid` 컬럼이
+없었다** — 3번 항목에서 본 것처럼 `person_uid`는 최근 프로토콜(passage
+페이로드)에만 등장한다.
 
-```python
-JETSON = {
-    "CAM_A_STREAM_URL": os.environ.get("JETSON_CAM_A_URL", "http://127.0.0.1:8000/stream"),
-    "CAM_B_STREAM_URL": os.environ.get("JETSON_CAM_B_URL", "http://127.0.0.1:8001/stream"),
-    "CAM_C_STREAM_URL": os.environ.get("JETSON_CAM_C_URL", ""),   # 미가동, 빈 값이면 대시보드가 빈 슬롯 표시
-    "CAM_D_STREAM_URL": os.environ.get("JETSON_CAM_D_URL", "http://127.0.0.1:8002/stream"),
-}
-```
+**B에게 확인 요청**: 지금 실제로 쓰는 DB(또는 서버 내부 상태)에
+- `journey_id` 하나에 `person_uid`(또는 동등한 "등록된 사람" 식별자)가
+  몇 번 매칭됐는지 셀 수 있는 테이블/필드가 있는지
+- 있다면 그 테이블 이름과 컬럼 구성
 
-대시보드는 이 URL 을 그대로 `<img src>` 로 박아 넣는다 — Django 서버를
-경유하지 않고 **브라우저가 각 Jetson 에 직접** 접속한다
-(`web/tracking/views.py` 의 `dashboard()` → `web/tracking/templates/tracking/dashboard.html`).
-
-확정된 구조("영상은 우선 각 Jetson HTTP Stream 을 브라우저가 직접 접근")와
-일치하므로 이 부분은 그대로 유지하면 된다.
+이게 확인되면 아래 API에 엔드포인트 하나 추가해서 받으면 된다.
 
 ---
 
-## 7. 환경변수 목록
+## 5. 제안하는 API 스펙 (개정판)
 
-| 변수 | 기본값 | 용도 |
-|---|---|---|
-| `DJANGO_SECRET_KEY` | `dev-only-change-me` | 운영 배포 전 반드시 변경 |
-| `DJANGO_DEBUG` | `1` | 운영은 `0` 으로 |
-| `DJANGO_CSRF_ORIGINS` | (빈 값) | 콤마 구분 origin 목록 |
-| `REDIS_URL` | `redis://127.0.0.1:6379/0` | 없으면 파일 폴백(느림) |
-| `JETSON_MQTT_HOST` | `127.0.0.1` | ⚠ 지금은 A보드(`10.10.20.56`)로 테스트 중. **최종은 메인 서버(`10.10.20.33`)** |
-| `JETSON_MQTT_PORT` | `1883` | |
-| `JETSON_MQTT_TOPIC` | `cctv/entry` | B/D 용 토픽 추가 필요 (`cctv/passage/b`, `cctv/completion/d`) |
-| `JETSON_CAM_A_URL` | `http://127.0.0.1:8000/stream` | 지금 `http://10.10.20.56:8000/stream` |
-| `JETSON_CAM_B_URL` | `http://127.0.0.1:8001/stream` | 지금 `http://10.10.20.56:8001/stream` |
-| `JETSON_CAM_C_URL` | (빈 값) | 미가동 |
-| `JETSON_CAM_D_URL` | `http://127.0.0.1:8002/stream` | 지금 `http://10.10.20.56:8002/stream` |
-
----
-
-## 8. Django 실행 명령
-
-Windows PowerShell 기준, `D:\20260728\reid-admin-web\web` 에서
-(venv: `D:\20260728\reid-admin-web\.venv`):
-
-```powershell
-# 최초 1회
-& "D:\20260728\reid-admin-web\.venv\Scripts\pip.exe" install -r requirements-web.txt
-& "D:\20260728\reid-admin-web\.venv\Scripts\python.exe" manage.py migrate
-& "D:\20260728\reid-admin-web\.venv\Scripts\python.exe" manage.py createsuperuser
-
-# 실행 (터미널 3개, 또는 필요한 것만)
-$env:JETSON_MQTT_HOST="10.10.20.56"; $env:JETSON_CAM_A_URL="http://10.10.20.56:8000/stream"
-$env:JETSON_CAM_B_URL="http://10.10.20.56:8001/stream"; $env:JETSON_CAM_D_URL="http://10.10.20.56:8002/stream"
-
-& "D:\20260728\reid-admin-web\.venv\Scripts\daphne.exe" -b 0.0.0.0 -p 8000 config.asgi:application
-& "D:\20260728\reid-admin-web\.venv\Scripts\python.exe" mqtt_worker.py       # jetson 연동
-& "D:\20260728\reid-admin-web\.venv\Scripts\python.exe" tracker_worker.py    # 로컬 카메라(현재 미사용)
-```
-
-`manage.py runserver` 는 절대 쓰지 말 것 — WSGI 라 MJPEG 스트리밍이 워커를
-통째로 잠근다. 반드시 `daphne`.
-
----
-
-## 9. 결정: 메인 서버 API 방식으로 간다
-
-`central_tracking.db` 직접 연결이 아니라 **B 가 API 를 열고 Django 가
-그걸 호출하는 방식**으로 확정. 이유:
-
-- B 가 메인 서버 담당이니 API 를 여는 게 원래 역할과도 맞음
-- Django 가 DB 파일을 직접 안 건드리니 `journey_sqlite_server.py` 의
-  쓰기와 절대 안 부딪힘 (SQLite 동시쓰기 문제 원천 차단)
-- B 가 스키마를 바꿔도 API 응답 모양만 유지하면 Django 는 영향 없음
-- Django 를 나중에 다른 PC로 옮기거나 인스턴스를 늘려도 자유로움
-
-`mqtt_worker.py` + 로컬 `db.sqlite3` 는 B 의 API 가 준비될 때까지의
-임시 구성이고, API 가 오면 `mqtt_ingest.py`/`mqtt_worker.py` 자리를
-API 를 호출하는 클라이언트 모듈로 교체할 예정.
-
-## 10. B 에게 제안하는 API 스펙 (초안)
-
-지금 Django 대시보드가 실제로 쓰는 데이터(4번 섹션) 기준으로 짜 본
-제안이다. B 가 이대로 하지 않아도 되고, 필요하면 이 문서 보면서 같이
-조정하면 된다. **핵심은 셋 다 GET, 인증 없이 사내망에서만 호출된다는
-전제.**
+전제: GET 전용, 사내망이라 인증 없음(필요하면 조정). 아래는 **대시보드가
+실제로 쓰는 화면 단위**로 다시 짠 제안이다 — B가 그대로 안 가도 되고,
+같이 조정하면 된다.
 
 ### `GET /api/persons`
-현재 대시보드의 "인물" 목록 카드 데이터. A(입장)/B(통과)/D(도착) 세
-체크포인트를 `global_person_id` 기준으로 이미 합쳐서 내려주면 Django
-쪽에서 다시 합칠 필요가 없어서 제일 좋음.
+감지 인물 패널용. A/B/D 체크포인트를 이미 하나의 인물로 합쳐서 내려주면
+Django 쪽에서 다시 합칠 필요가 없다.
 
 ```json
 {
   "persons": [
     {
-      "global_person_id": "G000001",
+      "person_id": "P000001",
+      "journey_ids": ["J000001", "J000045"],
       "label": null,
-      "first_seen": "2026-08-06T10:00:00+09:00",
-      "last_seen": "2026-08-06T10:03:12+09:00",
+      "confirmed": true,
+      "first_seen": "2026-08-10T10:00:00+09:00",
+      "last_seen": "2026-08-10T10:03:12+09:00",
       "checkpoints": ["A", "B"],
-      "status": "in_transit"
+      "match_count": 2,
+      "thumb_url": null
     }
   ]
 }
 ```
 
-- `checkpoints`: 이 사람이 실제로 통과한 노드 배열 (A/B/D 중 있는 것만) —
-  대시보드의 "카메라를 가로질러 매칭됐을 때 배지 사이 선" 표시에 그대로 씀
-- `status`: `entered`(A만) / `in_transit`(A+B) / `completed`(A+B+D) 같은
-  형태 제안. B 가 정의하는 대로 맞춰서 받으면 됨
+- `person_id`: 등록된(반복 방문 가능한) 사람의 영구 식별자 — `journey_id`는
+  방문(여정) 1회 단위라 사람 단위 식별자와는 다를 걸로 추정. **B 쪽 실제
+  명칭 확인 필요.**
+- `confirmed`: 등록(허가)된 인물인지 — 지금 대시보드의 초록/빨강 판정 기준
+- `match_count`: 4번 항목의 "journey_id-person_id 매칭 횟수"
 
 ### `GET /api/events?since=<ISO timestamp>`
-이벤트 로그용. Django 가 1초마다 폴링하면서 `since` 로 마지막으로 받은
-시각 이후 것만 요청 (매번 전체를 다시 안 받아도 되게).
+이벤트 로그 + 카메라 테두리 색/알림음 트리거용. `since` 이후 것만 요청해서
+매번 전체를 안 받는다.
 
 ```json
 {
   "events": [
-    {"at": "2026-08-06T10:03:12+09:00", "global_person_id": "G000001",
-     "node": "B", "kind": "passage"}
+    {"at": "2026-08-10T10:03:12+09:00", "node": "B", "kind": "passage",
+     "journey_id": "J000045", "person_id": "P000001", "confirmed": true}
   ]
 }
 ```
 
-### `GET /api/status`
-브로커/서버 상태. 지금 대시보드 상단 "MQTT 연결됨/끊김" 표시를 그대로
-대체.
+- `kind`: `entry`(A) / `passage`(B) / `arrival`(D) 정도로 제안
+- `confirmed`가 여기 있어야 카메라별로 등록/미등록 알림을 실시간으로
+  띄울 수 있다 — **제일 중요한 필드.**
+
+### `GET /api/stats?days=7|14|30`
+인원 통계 패널용.
 
 ```json
-{"mqtt_connected": true, "persons_total": 42, "last_event_at": "2026-08-06T10:03:12+09:00"}
+{"registered": 12, "unregistered": 3, "total": 15}
 ```
 
-### 확인 필요 (B 답변 대기)
+### `GET /api/status`
+헬스체크 + "감지 상태" 배지용.
 
-1. 위 3개 엔드포인트 모양, B 가 그대로 가도 되는지 / 어디를 바꾸고 싶은지
-2. `journey_sqlite_server.py` 가 A/B/D 세 이벤트를 `global_person_id` 로
-   이미 합쳐서 저장하는지, 아니면 Django 쪽(`GET /api/persons`)에서
-   합치는 로직까지 API 서버가 대신 해줘야 하는지
-3. 인증 필요 여부 (지금은 "사내망이라 없어도 됨" 가정)
-4. API 서버 기술 스택 (Flask/FastAPI/Django 등) — Django 쪽 클라이언트
-   코드 짜는 데는 영향 없지만 참고용
+```json
+{"broker_connected": true, "persons_total": 42, "last_event_at": "2026-08-10T10:03:12+09:00"}
+```
 
-이 4개 답이 오면 바로 `mqtt_worker.py` 자리를 API 클라이언트로 교체하는
-작업 시작하겠음.
+---
+
+## 6. B에게 확인 요청 (정리)
+
+1. ~~A 진입 페이로드~~ → **확인 완료** (3번). **B(재식별)/D(도착) 페이로드도
+   같은 식으로 실제 예시를 받고 싶다** — `journey_id`/`person_uid`가 정확히
+   어느 이벤트에서 처음 생기는지 이걸 봐야 확정된다.
+2. `journey_id`와 별개로 "등록된 사람" 단위 식별자(`person_id` 같은 것)가
+   있는지, 있다면 그 테이블/컬럼 이름 (4번)
+3. 위 API 4개(5번) 그대로 가도 되는지 / 바꾸고 싶은 부분
+4. API 서버 기술 스택 (Flask/FastAPI/Django 등) — Django 클라이언트 코드
+   작성에 영향은 없지만 참고용
+5. 테스트용으로 노드 하나만이라도 잠깐 켜서 이벤트를 흘려줄 수 있는지 —
+   지금 10.10.20.33 브로커를 직접 구독해봤는데 실시간 트래픽이 전혀 없어서
+   실제 페이로드 필드를 못 봤다
+
+이 답이 오면 바로 `mqtt_worker.py`/`mqtt_ingest.py` 자리를 이 API를 호출하는
+클라이언트 모듈로 교체하는 작업 시작하겠음.

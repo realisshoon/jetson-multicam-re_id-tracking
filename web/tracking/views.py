@@ -1,55 +1,54 @@
 import asyncio
 import hashlib
+from datetime import timedelta
 
-from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
-from . import bus
+from . import bus, central_db
 from .models import Camera, Event, Person, RuntimeConfig
-from .mqtt_ingest import NODE_CAMERAS
 
 BOUNDARY = "reidframe"
 
-# NODE_CAMERAS(mqtt_ingest.py)의 node_id → settings.JETSON 안의 스트림 URL 키.
-# 카메라 월(대시보드 통합 그리드)이 로컬 카메라와 jetson 카메라를 하나의
-# 목록으로 같이 보여준다. jetson 쪽은 Django 를 거치지 않고 브라우저가
-# 직접 스트림 URL 에 접근하므로 data-stream 값이 로컬(내부 프록시)과 다르다.
-JETSON_URL_KEYS = {
-    "A": "CAM_A_STREAM_URL", "B": "CAM_B_STREAM_URL",
-    "C": "CAM_C_STREAM_URL", "D": "CAM_D_STREAM_URL",
-}
 
-
-def _jetson_cams():
+def _camera_dicts():
+    """Camera 관리자 화면(트래킹 > 카메라)에서 편집한 값을 그대로 카메라 월에
+    쓴다. jetson_host 가 채워진 카메라는 그 Jetson 보드가 직접 서빙하는
+    MJPEG 스트림을 브라우저가 곧바로 embed 하고(Django 를 거치지 않는다),
+    비어있는 카메라는 이 PC에 연결된 로컬 소스로 보고 내부 프록시
+    (/video/<index>/, mjpeg 뷰)를 쓴다. 보드가 여러 대(A/B/C/D 각각 다른
+    IP)라도 카메라마다 IP를 따로 저장하니 각자 자기 주소로 스트리밍된다.
+    jetson 카메라를 앞에 둬야 카메라 월의 A/B/C/D 라벨이 노드 이름과
+    순서가 맞는다."""
+    jetson_cams = (Camera.objects.filter(enabled=True)
+                   .exclude(jetson_host="").exclude(jetson_host__isnull=True)
+                   .order_by("index"))
+    local_cams = (Camera.objects.filter(enabled=True)
+                  .filter(Q(jetson_host="") | Q(jetson_host__isnull=True))
+                  .order_by("index"))
     cams = []
-    for node_id, info in NODE_CAMERAS.items():
-        url = settings.JETSON.get(JETSON_URL_KEYS[node_id], "")
-        cams.append({
-            "index": info["index"],
-            "name": info["name"],
-            "url": url,
-            "source": url or "미가동",
-            "is_jetson": True,
-        })
+    for c in jetson_cams:
+        url = f"http://{c.jetson_host}:{c.jetson_port}/stream" if c.jetson_port else ""
+        cams.append({"index": c.index, "name": c.name, "url": url,
+                     "source": url or "미가동", "is_jetson": True})
+    for c in local_cams:
+        cams.append({"index": c.index, "name": c.name, "url": "",
+                     "source": c.source, "is_jetson": False})
     return cams
 
 
 # ------------------------------------------------------------------ (A) 화면
 def dashboard(request):
-    # index 900+ 는 jetson MQTT 워커가 자동 등록하는 가상 카메라
-    # (mqtt_ingest.NODE_CAMERAS). jetson 카메라를 앞에 둬야 카메라 월의
-    # A/B/C/D 라벨이 실제 jetson 노드 이름과 순서가 맞는다.
-    local_cams = list(Camera.objects.filter(enabled=True, index__lt=900))
     people = (Person.objects.filter(is_active=True)
               .prefetch_related("snapshots", "tracklets__camera")
               .annotate(n_track=Count("tracklets"))[:24])
     return render(request, "tracking/dashboard.html", {
-        "cameras": _jetson_cams() + local_cams,
+        "cameras": _camera_dicts(),
         "people": people,
         "config": RuntimeConfig.get(),
         "have_redis": bus.HAVE_REDIS,
@@ -113,28 +112,87 @@ def api_state(request):
             "last_seen": p.last_seen.strftime("%H:%M:%S"),
         })
 
+    today_start = timezone.localtime(timezone.now()).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+
+    # 카메라별 감지 횟수(오늘) — "감지 인물" 패널에서 카메라 박스가 몇 번
+    # 인식했는지 한눈에 보려고. 진입(ENTER) 이벤트 1건 = 그 카메라가 새로
+    # 인식한 사람 1명(같은 사람이 여러 카메라에 잡히면 카메라마다 따로 잡힌다).
+    camera_counts = {
+        str(row["camera__index"]): {"name": row["camera__name"], "count": row["n"]}
+        for row in (Event.objects
+                    .filter(kind=Event.ENTER, at__gte=today_start, camera__isnull=False)
+                    .values("camera__index", "camera__name")
+                    .annotate(n=Count("id")))
+    }
+
     return JsonResponse({
         "running": live.get("running", False),
         "fps": round(live.get("fps", 0.0), 1),
         "mqtt_connected": jetson_live.get("mqtt_connected", False),
+        "detection_enabled": RuntimeConfig.get().detection_enabled,
         "jetson_entries_total": jetson_live.get("entries_total", 0),
         "live_tracks": live.get("tracks", []),
         "system": live.get("system", {}),
         "totals": {
-            "people": Person.objects.filter(is_active=True).count(),
+            # "누적 인물" 은 전체 누적이 아니라 오늘 하루 기준으로 끊는다.
+            "people": Person.objects.filter(
+                is_active=True, created_at__gte=today_start).count(),
             "now": len(live.get("tracks", [])),
-            "cameras": (Camera.objects.filter(enabled=True, index__lt=900).count()
-                       + len(NODE_CAMERAS)),
+            "cameras": Camera.objects.filter(enabled=True).count(),
         },
         "gallery": gallery,
+        "camera_counts": camera_counts,
         "events": [
             {"at": e.at.strftime("%H:%M:%S"),
              "person": str(e.person),
+             "confirmed": e.person.confirmed,
              "cam": e.camera.name if e.camera else "—",
              "kind": e.get_kind_display()}
             for e in Event.objects.select_related("person", "camera")[:12]
         ],
     })
+
+
+def _period_stats(days):
+    since = timezone.now() - timedelta(days=days)
+    qs = Person.objects.filter(created_at__gte=since)
+    total = qs.count()
+    registered = qs.filter(confirmed=True).count()
+    return {"registered": registered, "unregistered": total - registered,
+            "total": total}
+
+
+def api_stats(request):
+    """기간별(7일/14일/30일) 등록/미등록/총 인원 통계.
+    '등록' 은 Person.confirmed(관리자가 검수 완료 처리한 인물)로 판단한다."""
+    return JsonResponse({
+        "week": _period_stats(7),
+        "two_weeks": _period_stats(14),
+        "month": _period_stats(30),
+    })
+
+
+def api_central(request):
+    """B의 중앙서버(central_tracking.db) 연동 상태. CENTRAL_DB_PATH 가
+    비어있거나 파일을 못 찾으면 available=False 로 조용히 응답한다 —
+    아직 그 파일이 실제로 어디 있는지 확정 전이라 기본값이 비어있다."""
+    return JsonResponse({
+        "available": central_db.is_available(),
+        "counts": central_db.counts(),
+        "recent_journeys": central_db.recent_journeys(20),
+    })
+
+
+@require_POST
+@login_required
+def api_toggle_detection(request):
+    """감지 on/off. Jetson 장비 자체는 원격으로 못 끄니, 우리 쪽 MQTT
+    수신을 끊는 걸로 흉내낸다 — mqtt_worker.py 가 1초 안에 반영한다."""
+    cfg = RuntimeConfig.get()
+    cfg.detection_enabled = request.POST.get("enabled") == "1"
+    cfg.save(update_fields=["detection_enabled"])
+    return JsonResponse({"ok": True, "detection_enabled": cfg.detection_enabled})
 
 
 @require_POST

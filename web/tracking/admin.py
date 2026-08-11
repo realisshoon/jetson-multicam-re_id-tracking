@@ -127,8 +127,10 @@ class TrackletAdmin(admin.ModelAdmin):
 # ==================================================================== 기타
 @admin.register(Camera)
 class CameraAdmin(admin.ModelAdmin):
-    list_display = ("index", "name", "source", "enabled", "note")
-    list_editable = ("name", "source", "enabled", "note")
+    list_display = ("index", "name", "jetson_host", "jetson_port",
+                    "source", "enabled", "note")
+    list_editable = ("name", "jetson_host", "jetson_port",
+                     "source", "enabled", "note")
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
