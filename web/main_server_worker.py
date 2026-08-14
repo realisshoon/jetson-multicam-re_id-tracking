@@ -29,6 +29,15 @@ Main 에 없는 엔드포인트였다(404) — Main API 는 그대로 두고 이
 한다 — 검토 대기(MANUAL_REVIEW_REQUIRED) 였던 게 나중에 확정되는 걸
 놓치지 않으면서도, 매 틱 N건 전부를 상세 조회하는 낭비를 피한다.
 
+2026-08-14: B가 `/api/events?since=<ISO timestamp>` 를 다시 살렸다
+(임시로 8081 포트에서 확인, RuntimeConfig 로 반영). 카메라별 감지
+이벤트(Event/Tracklet, 알림음의 데이터 소스)는 이제 `/api/journeys`
+상세의 nodes/captures 를 훑던 방식 대신 이 스트림 하나로 받는다 —
+poll_events() 가 커서(`since`/`next_since`) 기반으로 폴링한다. 재시작
+때마다 과거 이벤트를 전부 재생하면 오래된 감지들이 전부 새 알림음으로
+다시 울리니, 워커가 처음 뜨는 순간의 시각을 시작 커서로 잡는다(그
+이전 이벤트는 무시).
+
 실행:  python main_server_worker.py
 """
 import os
@@ -40,16 +49,21 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()                                    # ← ORM 쓰려면 반드시 먼저
 
 import requests                                    # noqa: E402
+from django.utils import timezone                  # noqa: E402
 
 from tracking import bus                            # noqa: E402
 from tracking.main_api_ingest import (               # noqa: E402
-    ingest_journey, ingest_journey_summary)
+    ingest_event_item, ingest_journey, ingest_journey_summary)
 from tracking.models import RuntimeConfig            # noqa: E402
 
 STATE_KEY = "state:main"     # 로컬 파이프라인의 state:live 와 분리
 POLL_SEC = 1.0
 JOURNEY_LIMIT = 50           # B 계약 예시(GET /api/journeys?limit=50)와 동일
 REQUEST_TIMEOUT = 3.0
+# 이 상태가 아니면 journey 가 아직 진행 중이라고 본다 — 진행 중인 동안은
+# 노드가 조용히 완결될 수 있어(§poll_journeys 2026-08-14) 신호 변화와
+# 무관하게 매 틱 상세를 다시 받는다.
+TERMINAL_JOURNEY_STATUSES = {"EXPIRED", "COMPLETED"}
 
 worker_state = {"connected": False, "entries_total": 0}
 
@@ -58,6 +72,11 @@ worker_state = {"connected": False, "entries_total": 0}
 # 기간 동안만 유지되면 충분하다(재시작하면 첫 폴링에서 전부 "처음 보는
 # journey" 로 다시 채움).
 _known_review_state: dict[str, tuple[str | None, str | None]] = {}
+
+# /api/events 커서. None 이면 아직 한 번도 안 불렀다는 뜻 — 그때 "지금
+# 시각"으로 초기화해서, 워커가 뜨기 전의 오래된 이벤트를 다시 재생해
+# 알림음이 몰아서 울리는 걸 막는다.
+_events_since: str | None = None
 
 
 def _base_url(cfg: RuntimeConfig) -> str:
@@ -113,12 +132,22 @@ def poll_journeys(base_url: str) -> None:
         # (카메라별 감지 횟수·확인음/경고음이 여기서 나온다)이 영원히
         # 안 생겼다(실측: Event 0건). journey_status(WAITING_D→EXPIRED/
         # COMPLETED 등)도 같이 봐서, 여정이 더 진행되면 다시 상세를 받는다.
+        #
+        # 2026-08-14 추가 실측(라이브로 직접 확인): journey_status 가 안
+        # 바뀐 채로도(예: WAITING_B_OR_C 그대로) 그 사이에 카메라 A 노드
+        # 자체가 matched_at/exited_at 로 조용히 완결되는 경우가 있다 —
+        # "다음 카메라로 넘어가야만 상태가 바뀐다"는 가정이 틀렸다. 그래서
+        # journey_status 가 아직 끝난 상태(EXPIRED/COMPLETED)가 아닌 동안은
+        # 신호가 안 바껴도 매 틱 그냥 다시 상세를 받는다 — 진행 중인
+        # journey 수가 많지 않아서(JOURNEY_LIMIT=50, REQUEST_TIMEOUT=3s)
+        # 비용이 크지 않다. 끝난 뒤에는 기존처럼 신호가 바뀔 때만 받는다.
         cur_signal = (item.get("identity_result") or item.get("final_review_result"),
                      item.get("journey_status"))
         first_seen = journey_id not in _known_review_state
-        if not (first_seen or _known_review_state.get(journey_id) != cur_signal):
+        still_active = item.get("journey_status") not in TERMINAL_JOURNEY_STATUSES
+        if not (first_seen or still_active or _known_review_state.get(journey_id) != cur_signal):
             skipped += 1
-            continue   # identity/진행상태 그대로 — 요약만 갱신하고 다음 항목으로
+            continue   # identity/진행상태 그대로(이미 끝난 여정) — 요약만 갱신하고 다음 항목으로
 
         try:
             detail = requests.get(f"{base_url}/api/journeys/{journey_id}",
@@ -138,6 +167,42 @@ def poll_journeys(base_url: str) -> None:
     print(f"[MAIN JOURNEY POLL] HTTP={http_status} received={len(items)} "
           f"latest={latest or '-'} ingested={ingested} skipped={skipped} errors={errors} "
           f"(누적 적재 {worker_state['entries_total']}건)")
+
+
+def poll_events(base_url: str) -> None:
+    """`/api/events?since=` 커서 폴링 — 카메라별 Event/Tracklet(알림음
+    데이터 소스)은 이제 전부 여기서 만든다. `since` 는 필수 파라미터라
+    (없으면 400) 첫 호출 전에 반드시 `_events_since` 를 채워둬야 한다.
+    실패해도(연결 끊김 등) 커서를 그대로 둬서 다음 틱에 같은 지점부터
+    이어받는다 — 이벤트를 건너뛰지 않는다."""
+    global _events_since
+    if _events_since is None:
+        _events_since = timezone.now().isoformat()
+        print(f"[MAIN EVENTS POLL] 시작 커서={_events_since}")
+
+    try:
+        resp = requests.get(f"{base_url}/api/events",
+                            params={"since": _events_since}, timeout=REQUEST_TIMEOUT)
+        http_status = resp.status_code
+        resp.raise_for_status()
+        body = resp.json()
+        items = body.get("items", [])
+        next_since = body.get("next_since")
+    except requests.RequestException as error:
+        print(f"[MAIN EVENTS POLL] HTTP=FAIL error={error}")
+        return
+
+    for item in items:
+        try:
+            ingest_event_item(item)
+        except Exception as error:                   # noqa: BLE001
+            print(f"[main-api] event_id={item.get('event_id')} 적재 실패(무시): {error!r}")
+
+    if next_since:
+        _events_since = next_since
+
+    print(f"[MAIN EVENTS POLL] HTTP={http_status} received={len(items)} "
+          f"since={_events_since}")
 
 
 def main():
@@ -167,13 +232,13 @@ def main():
                     print(f"[main-api] 연결 끊김(health): {error}")
                 worker_state["connected"] = False
 
-            # journey polling 은 health 가 살아있을 때만 시도하되, 그 성패가
-            # main_connected 를 건드리지 않는다(poll_journeys 내부에서
-            # worker_state["journeys_ok"] 로만 따로 기록) — health 는 되는데
-            # journeys 엔드포인트만 잠깐 흔들리는 경우를 "연결 끊김"으로
-            # 잘못 보여주지 않기 위함.
+            # journey/events polling 은 health 가 살아있을 때만 시도하되, 그
+            # 성패가 main_connected 를 건드리지 않는다(각자 자기 실패를
+            # 자기가 처리) — health 는 되는데 journeys/events 엔드포인트만
+            # 잠깐 흔들리는 경우를 "연결 끊김"으로 잘못 보여주지 않기 위함.
             if worker_state["connected"]:
                 poll_journeys(base_url)
+                poll_events(base_url)
 
             bus.publish_state({
                 "main_connected": worker_state["connected"],

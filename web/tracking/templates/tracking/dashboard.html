@@ -85,6 +85,9 @@ button{font-family:inherit}
 .settings-row input[type="checkbox"]{width:16px;height:16px;accent-color:var(--calm)}
 .settings-row.link{color:var(--calm);text-decoration:none;font-family:var(--mono);
   font-size:13.2px;letter-spacing:.04em}
+.settings-logout-form{margin:0}
+.settings-row.logout-btn{width:100%;background:none;border:none;text-align:left;
+  color:var(--alert);font:inherit}
 .settings-sub{padding:2px 10px 8px;border-bottom:1px solid var(--rule);
   margin-bottom:4px;display:flex;flex-direction:column;gap:8px}
 .settings-slider{display:grid;grid-template-columns:44px 1fr 52px;align-items:center;
@@ -427,6 +430,7 @@ a.jr-thumblink{display:block;line-height:0}
           <span class="settings-val" id="snd-volume-val"></span>
         </label>
         <button class="btn settings-test" id="snd-test-chime" type="button">등록 완료음 테스트 · A</button>
+        <button class="btn settings-test" id="snd-test-fail" type="button">등록 실패음 테스트 · A</button>
         <button class="btn settings-test" id="snd-test-warn" type="button">미등록 경고음 테스트 · B·C·D</button>
       </div>
       <a class="settings-row link" href="/admin/tracking/person/">인물 관리 →</a>
@@ -440,6 +444,10 @@ a.jr-thumblink{display:block;line-height:0}
       {% if user.is_superuser %}
       <a class="settings-row link" href="{% url 'db_admin' %}">DB 관리 →</a>
       {% endif %}
+      <form class="settings-logout-form" method="post" action="{% url 'logout' %}">
+        {% csrf_token %}
+        <button type="submit" class="settings-row link logout-btn">로그아웃 →</button>
+      </form>
     </div>
   </div>
   <div class="clock num" id="wall-clock">--:--:--</div>
@@ -508,7 +516,7 @@ a.jr-thumblink{display:block;line-height:0}
             <button class="det-nav det-prev" type="button" aria-label="이전(과거) 감지">‹</button>
             <div class="det-card is-empty">—</div>
             <button class="det-nav det-next" type="button" aria-label="다음(최신) 감지">›</button>
-            <button type="button" class="det-badge" title="누구와 헷갈리는지 보기">미등록자 감지</button>
+            <button type="button" class="det-badge" title="누구와 헷갈리는지 보기">데이터 선택</button>
           </div>
           {% endwith %}
           {% endfor %}
@@ -991,6 +999,7 @@ sndVolumeEl.oninput = () => {
 // 없는 것처럼 보인다(실제로 이 버튼들이 꺼짐 상태에선 disabled 로 막혀
 // 있어서 "소리가 아예 안 난다"는 문제의 진짜 원인이었다).
 document.getElementById('snd-test-chime').onclick = () => speakChime();
+document.getElementById('snd-test-fail').onclick  = () => speakFail();
 document.getElementById('snd-test-warn').onclick  = () => speakWarning();
 
 settingsBtn.onclick = (ev) => {
@@ -1014,17 +1023,25 @@ sndToggle.onchange = function(){
 };
 refreshSndUI();
 
-/* ── 알림음 두 가지 ────────────────────────────────────────────────
-   둘 다 음성합성(Web Speech API)으로 말해준다 — 화면을 안 보고 있어도
-   무슨 상황인지 바로 알 수 있게. A 카메라에서 등록된 인물로 확인되면
-   "등록완료", B·C·D 에서 미등록자가 확인되면 "미등록자 감지"를 한 번만
-   말한다(2026-08-13: 한때 등록완료를 실제 음원 파일로 바꿨다가, 다시
-   말소리로 되돌림). 동시에 여러 카메라에서 겹치면 브라우저가 알아서
-   순서대로 큐에 쌓아 이어 말한다(하나가 다른 걸 끊지 않는다).
-   speakChime/speakWarning 은 소리 자체(설정 패널 "테스트" 버튼이 마스터
-   스위치와 무관하게 항상 미리 들어볼 수 있게 쓴다) 이고, playChime/
-   playWarning 은 실제 감지 때만 쓰는, soundOn(알림음 마스터 스위치)을
-   먼저 확인하는 버전이다. */
+/* ── 알림음 ─────────────────────────────────────────────────────────
+   등록완료(A)는 pass.mp3, 미등록자 감지(B·C·D)는 sound_2.mp3 — 둘 다
+   실제 음원 파일을 재생한다. 등록실패(A)만 음성합성(Web Speech API)
+   으로 말한다 — 화면을 안 보고 있어도 무슨 상황인지 바로 알 수 있게.
+   음원 파일은 매번 새 Audio 인스턴스로 재생해서 여러 카메라에서 겹쳐
+   들어와도 서로 안 끊고 겹쳐 나온다(2026-08-14: "감지 하나하나마다
+   소리는 겹쳐도 된다" 요청). TTS(등록실패)도 브라우저가 알아서 순서대로
+   큐에 쌓아 이어 말한다.
+   speakChime/speakWarning/speakFail 은 소리 자체(설정 패널 "테스트"
+   버튼이 마스터 스위치와 무관하게 항상 미리 들어볼 수 있게 쓴다) 이고,
+   playChime/playWarning/playFail 은 실제 감지 때만 쓰는, soundOn(알림음
+   마스터 스위치)을 먼저 확인하는 버전이다. */
+const CHIME_URL = "{% static 'tracking/pass.mp3' %}";
+const WARNING_URL = "{% static 'tracking/sound_2.mp3' %}";
+function playAudioFile(url){
+  const a = new Audio(url);
+  a.volume = Math.min(1, sndVolume / 100);
+  a.play().catch(() => {});   // 자동재생 차단 등은 조용히 무시
+}
 function speak(text){
   if(!('speechSynthesis' in window)) return;
   const u = new SpeechSynthesisUtterance(text);
@@ -1033,11 +1050,13 @@ function speak(text){
   u.volume = Math.min(1, sndVolume / 100);
   speechSynthesis.speak(u);
 }
-function speakChime(){ speak('등록완료'); }
-function speakWarning(){ speak('미등록자 감지'); }
+function speakChime(){ playAudioFile(CHIME_URL); }
+function speakWarning(){ playAudioFile(WARNING_URL); }
+function speakFail(){ speak('등록실패'); }
 
 function playChime(){ if(soundOn) speakChime(); }
 function playWarning(){ if(soundOn) speakWarning(); }
+function playFail(){ if(soundOn) speakFail(); }
 
 /* ── 카메라별 경보 상태 ────────────────────────────────────────────
    예전엔 화면 상단에 별도 스트립을 두고 "가장 최근 이벤트 1개"만
@@ -1123,18 +1142,37 @@ function refreshDetectPill(mainConnected, detectionEnabled){
 }
 
 // 진입 이벤트 발생 — 그 카메라만 확인중(주황)으로 전환, CHECK_MS 뒤
-// 결과 판정. 같은 카메라에서 또 감지되면 진행 중이던 사이클을 새로
-// 시작한다. 다른 카메라는 각자의 사이클을 그대로 유지한다.
-// 소리는 결과가 나온 시점에 딱 한 번만 울린다 — A 에서 등록 확인되면
-// "띠로링" 차임(HOLD_MS 동안 반복), B·C·D 에서 미등록으로 확인되면
-// 음성으로 "미등록자 감지" 한 번만 말한다(예전엔 반복해서 여러 번
-// 말했는데 시끄럽다는 피드백으로 1회로 줄였다). 그 외 조합(A 미등록,
-// B·C·D 등록)은 화면 색만 바뀌고 소리는 안 낸다.
+// 결과 판정. 같은 카메라에서 또 감지되면 "화면 표시" 사이클(확인중→
+// 등록/미등록→평시)만 새로 시작한다. 다른 카메라는 각자의 사이클을
+// 그대로 유지한다.
 // 2026-08-13: "등록완료"는 mainResolved(메인 서버가 NEW/REVISIT 으로
-// 확정 식별) 기준으로 A 에서 매번 울린다 — confirmed(관리자 검수 여부)
-// 는 화면 색(등록됨/미등록 표시)에는 계속 쓰지만 차임 여부와는 별개다.
-// "미등록자 감지"는 그대로 confirmed 기준으로 B·C·D 에서 매번 운다.
+// 확정 식별) 기준으로 A 에서 울린다 — confirmed(관리자 검수 여부)는
+// 화면 색(등록됨/미등록 표시)에는 계속 쓰지만 차임 여부와는 별개다.
+// "미등록자 감지"는 confirmed 기준으로 B·C·D 에서 운다.
+// 2026-08-14: "카메라창에 STRANGER 박스가 감지될 때마다(=이 감지 하나
+// 하나마다) 매번 소리가 나와야 한다" 요청 — 예전엔 소리 재생이 화면
+// 표시용 타이머(camTimers)에 얹혀 있어서, 같은 카메라에 3초(CHECK_MS)
+// 안에 감지가 연달아 들어오면 clearCamTimers 가 이전 타이머를 통째로
+// 취소해 앞 감지의 소리가 아예 안 울리는 문제가 있었다(실측: Camera C
+// 에 24건이 몰려 들어온 상황에서 재현). 그래서 소리는 화면 표시
+// 타이머(check/hold, clearCamTimers 로 취소될 수 있음)와 완전히 분리된
+// 자기만의 타이머로 예약한다 — 몇 개가 겹쳐 들어와도 감지 이벤트
+// 하나하나가 전부 독립적으로 소리를 낸다(서로 취소 안 함).
+// 2026-08-14 추가: "A는 딜레이 없이 바로 등록완료/등록실패를 말해달라"
+// 요청 — A만 CHECK_MS(3초) 대기 없이 즉시 판정해서 말한다(성공이면
+// "등록완료", mainResolved 가 false 면 "등록실패"). B·C·D 는 그대로
+// CHECK_MS 뒤에 판정한다 — 화면의 "확인중" 표시는 A 도 포함 모든
+// 카메라에서 그대로 유지한다(소리 타이밍만 A 를 앞당긴 것).
 function startChecking(camIdx, confirmed, mainResolved){
+  const L = camLabel[camIdx];
+  if(L === 'A'){
+    if(mainResolved) playChime(); else playFail();
+  } else {
+    setTimeout(() => {
+      if(!confirmed && (L === 'B' || L === 'C' || L === 'D')) playWarning();
+    }, CHECK_MS);
+  }
+
   clearCamTimers(camIdx);
   camState.set(camIdx, 'checking');
   applyCamVisual(camIdx, prevCounts[camIdx]);
@@ -1143,9 +1181,6 @@ function startChecking(camIdx, confirmed, mainResolved){
     camState.set(camIdx, confirmed ? 'registered' : 'alert');
     applyCamVisual(camIdx, prevCounts[camIdx]);
     refreshTopNote();
-    const L = camLabel[camIdx];
-    if(mainResolved && L === 'A') playChime();    // 크게 한 번만 울린다
-    else if(!confirmed && (L === 'B' || L === 'C' || L === 'D')) playWarning();
     const hold = setTimeout(() => {
       camState.delete(camIdx);
       applyCamVisual(camIdx, prevCounts[camIdx]);
@@ -1242,10 +1277,14 @@ function render(d){
   // 같은 폴링 간격 안에 여러 카메라에서 동시에 감지돼도 전부 잡힌다.
   // 오래된 것부터 순서대로 처리하려고 뒤집어서 돈다. 최초 로드 시
   // 이미 쌓여 있던 과거 이벤트는 재생하지 않는다(initialized 가드).
+  // 2026-08-14: 예전엔 at|person|cam|kind 로 키를 만들었는데 at 이 초
+  // 단위라, 같은 사람이 같은 카메라에서 1초 안에 두 번 잡히면(실측:
+  // nodes+captures 양쪽에서 각각 Event 가 생기는 경우) 둘째 감지가
+  // "이미 처리함"으로 조용히 씹혀서 "등록완료"가 매번 안 울렸다 —
+  // Event 실제 PK(e.id)로 구분해서 절대 충돌 안 나게 한다.
   (d.events || []).slice().reverse().forEach(e => {
-    const key = `${e.at}|${e.person}|${e.cam}|${e.kind}`;
-    if(seenEventKeys.has(key)) return;
-    seenEventKeys.add(key);
+    if(seenEventKeys.has(e.id)) return;
+    seenEventKeys.add(e.id);
     if(initialized && e.kind === '진입'){
       const idx = CAM_MAP[e.cam];
       if(idx !== undefined) startChecking(String(idx), !!e.confirmed, !!e.main_resolved);

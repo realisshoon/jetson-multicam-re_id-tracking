@@ -4,13 +4,14 @@ from datetime import timedelta
 from urllib.parse import quote, urlparse
 
 import requests
+from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.db.models import Count, Q
 from django.db.models.functions import TruncDate
 from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
@@ -431,8 +432,9 @@ def api_state(request):
 
     # 2026-08-12 재작업: "보류 리스트"(구 미등록자 감지 기록) 데이터가 거의
     # 안 채워진다는 지적 — 원인은 Event 가 신원이 "확정"된 여정에만 생기고
-    # (§_ingest_nodes, MANUAL_REVIEW_REQUIRED 인 동안은 Tracklet/Event 자체를
-    # 안 만듦) 정작 절대다수인 "헷갈리는" 여정은 한 번도 안 잡혔기 때문이다.
+    # (§main_api_ingest.ingest_event_item, MANUAL_REVIEW_REQUIRED 인 동안은
+    # Tracklet/Event 자체를 안 만듦) 정작 절대다수인 "헷갈리는" 여정은 한
+    # 번도 안 잡혔기 때문이다.
     # 이제 MANUAL_REVIEW_REQUIRED Journey 도 같이 합쳐서 보여준다 — Camera A
     # 가 유일한 캡처 지점이라 route 의 첫 글자로 카메라 줄을 매긴다(실측:
     # 저장된 route 가 전부 "A"로 시작). "보류"(=error, 실제 인물과 연결됨)로
@@ -495,13 +497,12 @@ def api_state(request):
         #   confirmed     = 관리자가 이 사람을 직접 검수/등록 확정했는지(로컬
         #                    전용, 기본 False — "보류 리스트" 필터링 기준 그대로).
         #   main_resolved = Main 이 이 Journey 를 NEW/REVISIT 으로 확실히
-        #                    식별했는지. Event 는 애초에 person 이 확정된
-        #                    (MANUAL_REVIEW_REQUIRED 가 아닌) Journey 에서만
-        #                    만들어지므로(§main_api_ingest.ingest_journey,
-        #                    `if person: _ingest_nodes(...)`) 사실상 항상
-        #                    True 지만, journey 가 나중에(관리자가 이동 목록
-        #                    에서 직접) 삭제돼 FK 가 끊기는 경우를 대비해
-        #                    매번 다시 계산한다.
+        #                    식별했는지. Event 는 애초에 canonical_person_uid
+        #                    가 있고 MANUAL_REVIEW_REQUIRED 가 아닐 때만
+        #                    만들어지므로(§main_api_ingest.ingest_event_item)
+        #                    사실상 항상 True 지만, journey 가 나중에(관리자가
+        #                    이동 목록에서 직접) 삭제돼 FK 가 끊기는 경우를
+        #                    대비해 매번 다시 계산한다.
         #   A 카메라 "등록완료" 차임은 main_resolved 기준(요청: "A 카메라
         #   데이터로 매번 동작"), B·C·D "미등록자 감지" 경고음은 여전히
         #   confirmed 기준(관리자가 아직 검수 안 한 사람)이다.
@@ -509,7 +510,16 @@ def api_state(request):
             # person 표시는 항상 person_uid(P000006) 우선 — Person.__str__ 은
             # label 없으면 "미확인 #2" 식 내부 PK 를 보여주는데, 이건 메인
             # 서버가 모르는 우리 내부 번호라 여기서 보이면 안 된다.
-            {"at": timezone.localtime(e.at).strftime("%H:%M:%S"),
+            #
+            # 2026-08-14: 프런트의 "이미 처리한 이벤트" 중복제거 키가
+            # at|person|cam|kind 조합이었는데, at 이 초 단위(HH:MM:SS)
+            # 라 같은 사람이 같은 카메라에서 1초 안에 두 번 잡히면(실측:
+            # nodes+captures 양쪽에서 각각 Event 가 생겨 1초 차이로 남는
+            # 경우 있음) 두 번째가 "이미 본 것"으로 조용히 씹혀서 소리가
+            # 안 났다 — Event 의 실제 PK 를 내려줘서 그걸로 구분하게 한다
+            # (초 단위로 절대 충돌 안 함).
+            {"id": e.pk,
+             "at": timezone.localtime(e.at).strftime("%H:%M:%S"),
              "person": e.person.external_id or str(e.person),
              "confirmed": e.person.confirmed,
              "main_resolved": bool(e.journey and e.journey.final_review_result
@@ -845,8 +855,17 @@ def _period_stats(days):
     journey 가 실제로 많다(Main 쪽 실측 확인: EXPIRED/COMPLETED 여러 건이
     final_review_result=null). 그동안 "총"에는 이런 미확정 건도 포함
     됐는데 화면엔 안 보여서 마치 데이터가 빈 것처럼 보였다 — pending 을
-    따로 계산해서 신규+재방문+검토+미확정 = 총 이 되게 노출한다."""
-    since = timezone.now() - timedelta(days=days)
+    따로 계산해서 신규+재방문+검토+미확정 = 총 이 되게 노출한다.
+
+    2026-08-14 갱신: "지금 시각 기준 최근 N일"(rolling window)이었더니,
+    어제 오후에 쌓인 데이터가 24시간이 안 지나서 "1일" 통계에 그대로
+    남아있어 "오늘 아무 것도 안 했는데 1일에 쌓여있다"는 혼란을 줬다 —
+    "매일 00:00마다 새로 집계해달라" 요청으로, 자정(로컬 타임존) 기준
+    캘린더 일수로 바꾼다: "1일"=오늘 00:00부터, "3일"=오늘 포함 최근
+    3일(그저께 00:00부터), 이런 식으로 매일 자정에 리셋된다."""
+    today_local_midnight = timezone.localtime().replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    since = today_local_midnight - timedelta(days=days - 1)
     qs = Journey.objects.filter(entry_at__gte=since)
     new = qs.filter(final_review_result=Journey.NEW).count()
     revisit = qs.filter(final_review_result=Journey.REVISIT).count()
@@ -1236,6 +1255,20 @@ def api_rename(request, person_id: int):
     p.label = request.POST.get("label", "").strip()[:50]
     p.save(update_fields=["label"])
     return JsonResponse({"ok": True, "label": p.label})
+
+
+@require_POST
+@login_required
+def logout_view(request):
+    """설정 드롭다운 "로그아웃" — POST 폼으로만 받는다(GET 로그아웃은
+    제3자 페이지가 <img src="/logout/"> 같은 걸로 강제 로그아웃시킬 수
+    있는 CSRF 취약점이라 Django 도 4.1부터 막았다)."""
+    auth_logout(request)
+    # next= 없이 그냥 /admin/login/ 으로만 보내면 로그인 후 대시보드(/)가
+    # 아니라 Django admin 홈(/admin/)으로 떨어진다 — 다른 곳들처럼(§det
+    # 401/302 처리) next= 를 명시해서 로그인하면 카메라 화면으로 바로
+    # 오게 한다.
+    return redirect("/admin/login/?next=/")
 
 
 def healthz(request):

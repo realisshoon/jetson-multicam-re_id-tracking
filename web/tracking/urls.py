@@ -35,6 +35,7 @@ urlpatterns = [
                                    name="api_toggle_detection"),
     path("api/person/<int:person_id>/rename/",
                                    views.api_rename,  name="api_rename"),
+    path("logout/",                views.logout_view,  name="logout"),
     path("healthz/",               views.healthz,     name="healthz"),
 
     path("db-admin/",              views.db_admin_view, name="db_admin"),

@@ -67,16 +67,33 @@ MANUAL_REVIEW_REQUIRED 가 아닐 때뿐이다 — 검토 대기 중인 여정�
 횟수"·이벤트 기록·TTS 알림(A 등록완료 차임/B·C·D 미등록 경고)이 전부
 멎어 있었다 — 그 기능들은 전부 Event/Tracklet 레코드가 새로 생겨야
 동작하는데, ingest_event() 를 없앤 뒤로 아무것도 안 만들고 있었다.
-상세 응답의 `nodes`(카메라별 통과 기록: node_id/local_track_id/
-matched_at 등)가 옛 /api/events 스트림과 같은 역할을 할 수 있어서,
-`ingest_journey()` 가 identity 처리 뒤에 이걸로 Tracklet/Event 를
-다시 채운다. person 이 확정된 경우(=MANUAL_REVIEW_REQUIRED 아님)에만
-한다 — 신원 미확정 상태로 카메라 알림을 울리면 임시 UID 를 사실상
-노출하는 셈이라 B 지시사항(임시 UID 최종 노출 금지)에 어긋난다.
+당시엔 상세 응답의 `nodes`/`captures`(카메라별 통과·캡처 기록)로
+대신 Tracklet/Event 를 채웠었다(`_ingest_nodes()`, 이제 삭제됨 — 아래
+2026-08-14 항목 참고).
+
+2026-08-14: B가 `/api/events?since=<ISO timestamp>` 를 실제로 부활시켰다
+(HANDOFF_TO_MAIN_SERVER.md §8 요청에 대한 응답, 임시 포트 8081에서 확인).
+응답 1건 모양(실측):
+    {"event_id": 168, "at": "2026-08-14T13:00:01+09:00",
+     "journey_id": "J000052", "node": "A", "kind": "ENTRY",
+     "person_uid": "P000039", "canonical_person_uid": "P000039",
+     "identity_status": "NEW"}
+    (kind: ENTRY/PASSAGE/ARRIVAL, node_id 별로 하나씩 옴)
+`since` 는 필수고(없으면 400), 응답에 `next_since` 커서가 같이 온다
+(`main_server_worker.py::poll_events()` 가 이어서 유지).
+
+이게 `nodes`/`captures` 를 훑던 옛 방식보다 훨씬 낫다: (1) 카메라 B가
+`nodes`/`captures` 어디에도 안 잡히던 문제와 무관하게 Main이 직접
+이벤트로 쏴준다, (2) journey 상세를 매번 다시 조회할 필요 없이 이
+스트림 하나로 카메라별 실시간 감지를 바로 안다, (3) `event_id` 가
+Main이 보장하는 유일 값이라 중복 방지가 훨씬 단순하다. 그래서 Event
+생성은 이제 이 스트림(`ingest_event_item()`)이 유일한 경로다 —
+`ingest_journey()` 는 Journey 자체 필드(캡처/점수/최종판정)만 채우고
+더 이상 Event 를 안 만든다(두 경로가 같이 만들면 카메라당 소리가
+두 번 나는 등 중복이 생긴다).
 """
 from __future__ import annotations
 
-import zlib
 from datetime import datetime
 from typing import Any
 
@@ -106,52 +123,51 @@ def _get_camera(node_id: str) -> Camera:
     return cam
 
 
-def _node_local_id(journey_id: str, node_id: str, local_track_id: Any) -> int:
-    """(journey_id, node_id, local_track_id) 조합을 Tracklet.local_id(정수)
-    로 안정적으로 바꾼다. local_track_id 는 노드 하나 안에서만 의미 있는
-    작은 롤링 번호라(B 경고: "D Local Track=13 과 Person ID=P000006 은
-    완전히 다른 값") journey_id 를 반드시 같이 섞어야 한다 — 안 그러면
-    다른 날 다른 사람이 같은 카메라에서 같은 local_track_id 를 받았을 때
-    같은 트랙렛으로 잘못 합쳐진다."""
-    return zlib.crc32(f"{journey_id}:{node_id}:{local_track_id}".encode("utf-8"))
+def ingest_event_item(item: dict[str, Any]) -> None:
+    """`/api/events` 스트림 1건 → Tracklet/Event(카메라별 감지 이벤트,
+    등록완료/미등록자감지 알림음이 전부 이걸 보고 동작한다).
 
+    B 지시사항 그대로 적용: `person_uid` 는 못 믿고(임시값일 수 있음)
+    `canonical_person_uid` 만 최종 신원으로 쓴다 — 그 값이 있고
+    `identity_status` 가 MANUAL_REVIEW_REQUIRED 가 아닐 때만 Person 을
+    연결한다(신원 미확정 상태로 카메라 알림을 울리면 임시 UID 를 사실상
+    노출하는 셈이라 안 된다).
 
-def _ingest_nodes(person: Person, journey: "Journey", nodes: list[dict[str, Any]]) -> None:
-    """상세 응답의 `nodes`(카메라별 통과 기록)로 Tracklet/Event 를 채운다
-    — 카메라별 "오늘 감지 횟수"·이벤트 로그·TTS 알림이 전부 이 Event
-    레코드를 보고 동작한다(dashboard.html 의 진입 이벤트 처리 참고).
-    같은 journey 를 재처리해도(예: 판정이 나중에 바뀌어 다시 부를 때)
-    Tracklet get_or_create 가 중복 생성을 막는다.
+    `event_id` 는 Main 이 보장하는 유일 값이라 그대로 Tracklet.local_id
+    로 써서 중복을 막는다(카메라+event_id 조합은 재발급되지 않는다) —
+    옛 nodes/captures 스크래핑 방식(§_node_local_id, CRC32 해시)보다
+    훨씬 단순하고 확실하다."""
+    event_id = item.get("event_id")
+    node_id = item.get("node")
+    if event_id is None or not node_id:
+        return
 
-    2026-08-12: Event.journey 를 여기서 채운다 — journey 는 호출부에서
-    이미 update_or_create 로 만들어진 뒤의 실제 객체를 받는다(journey_id
-    문자열만으로는 나중에 "이 감지가 어느 journey 캡처 사진을 쓰는지"
-    못 찾는다, 사진은 Journey.body_images/face_images 에 있다)."""
-    for node in nodes or []:
-        node_id = node.get("node_id")
-        if not node_id:
-            continue
-        cam = _get_camera(node_id)
-        entered_at = _parse_at(node.get("entered_at"))
-        matched_at = _parse_at(node.get("matched_at")) or entered_at or timezone.now()
-        exited_at = _parse_at(node.get("exited_at"))
-        local_track_id = node.get("local_track_id")
+    canonical_uid = item.get("canonical_person_uid") or ""
+    identity_status = item.get("identity_status") or ""
+    if not canonical_uid or identity_status == Journey.MANUAL_REVIEW:
+        return   # 아직 신원 미확정 — 임시 UID 로 Event 안 만든다(B 지시사항)
 
-        _tracklet, created = Tracklet.objects.get_or_create(
-            person=person, camera=cam,
-            local_id=_node_local_id(journey.journey_id, node_id, local_track_id),
-            defaults={"start_at": entered_at or matched_at,
-                     "end_at": exited_at or matched_at, "frames": 1},
-        )
-        if not created:
-            continue   # 이미 이 노드 통과를 기록했다 — 이벤트도 이미 만들어져 있다
+    at = _parse_at(item.get("at")) or timezone.now()
+    person = _sync_person(canonical_uid, at, None)
+    if not person:
+        return
 
-        Event.objects.create(
-            person=person, camera=cam, kind=Event.ENTER, at=matched_at,
-            detail=f"{node_id} journey={journey.journey_id}",
-            was_unregistered=not person.confirmed,
-            journey=journey,
-        )
+    cam = _get_camera(node_id)
+    journey = Journey.objects.filter(journey_id=item.get("journey_id")).first()
+
+    _tracklet, created = Tracklet.objects.get_or_create(
+        person=person, camera=cam, local_id=event_id,
+        defaults={"start_at": at, "end_at": at, "frames": 1},
+    )
+    if not created:
+        return   # 이미 이 이벤트를 처리했다
+
+    Event.objects.create(
+        person=person, camera=cam, kind=Event.ENTER, at=at,
+        detail=f"{node_id} journey={item.get('journey_id')} (events API, kind={item.get('kind')})",
+        was_unregistered=not person.confirmed,
+        journey=journey,
+    )
 
 
 def _route_str(route: Any) -> str:
@@ -301,10 +317,5 @@ def ingest_journey(data: dict[str, Any]) -> Journey | None:
             "face_images": face_images,
         },
     )
-
-    # Journey 가 이미 만들어진 뒤에 노드를 채워야 Event.journey FK 를
-    # 걸 수 있다(사진 연결용) — 그래서 update_or_create 뒤로 옮겼다.
-    if person:
-        _ingest_nodes(person, journey, data.get("nodes"))
 
     return journey
