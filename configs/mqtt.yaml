@@ -1,0 +1,4 @@
+broker:
+  host: 10.10.20.33
+  port: 1883
+  qos: 1

@@ -1,0 +1,56 @@
+{
+  "persons": [
+    {"person_uid": "P000048", "status": "ACTIVE", "visit_count": 1},
+    {"person_uid": "P000049", "status": "ACTIVE", "visit_count": 1}
+  ],
+  "journeys": [
+    {
+      "journey_id": "J000061",
+      "request_id": "A_FIXTURE_J000061",
+      "person_uid": "P000048",
+      "status": "COMPLETED",
+      "route": ["A", "C", "D"],
+      "entry_at": "2026-08-14T13:47:01+09:00",
+      "passage_at": "2026-08-14T13:47:07+09:00",
+      "arrival_at": "2026-08-14T13:47:12.379+09:00",
+      "completed_at": "2026-08-14T13:47:12.379+09:00",
+      "person_status": "NEW",
+      "candidate_person_uid": null,
+      "identity_result": "NEW",
+      "review_status": "NOT_REQUIRED",
+      "canonical_person_uid": "P000048"
+    },
+    {
+      "journey_id": "J000062",
+      "request_id": "A_FIXTURE_J000062",
+      "person_uid": "P000049",
+      "status": "COMPLETED",
+      "route": ["A", "C", "D"],
+      "entry_at": "2026-08-14T13:47:36+09:00",
+      "passage_at": "2026-08-14T13:47:43+09:00",
+      "arrival_at": "2026-08-14T13:47:48.172+09:00",
+      "completed_at": "2026-08-14T13:47:48.172+09:00",
+      "person_status": "NEW",
+      "candidate_person_uid": "P000048",
+      "identity_result": "NEW",
+      "review_status": "RESOLVED",
+      "canonical_person_uid": "P000049"
+    }
+  ],
+  "events": [
+    {"journey_id": "J000061", "node": "A", "kind": "ENTRY", "at": "2026-08-14T13:47:01+09:00", "payload": {"local_track_id": 1}},
+    {"journey_id": "J000061", "node": "C", "kind": "PASSAGE", "at": "2026-08-14T13:47:07+09:00", "payload": {"c_local_track_id": 15}},
+    {"journey_id": "J000061", "node": "D", "kind": "ARRIVAL", "at": "2026-08-14T13:47:12.379+09:00", "payload": {"arrival_event_id": "arrival-j61", "d_local_track_id": 3, "d_track_first_seen_at": "2026-08-14T13:47:07.365+09:00"}},
+    {"journey_id": "J000062", "node": "A", "kind": "ENTRY", "at": "2026-08-14T13:47:36+09:00", "payload": {"local_track_id": 2}},
+    {"journey_id": "J000062", "node": "C", "kind": "PASSAGE", "at": "2026-08-14T13:47:43+09:00", "payload": {"c_local_track_id": 26}},
+    {"journey_id": "J000062", "node": "D", "kind": "ARRIVAL", "at": "2026-08-14T13:47:48.172+09:00", "payload": {"arrival_event_id": "arrival-j62", "d_local_track_id": 15, "d_track_first_seen_at": "2026-08-14T13:47:44.612+09:00"}}
+  ],
+  "captures": [
+    {"journey_id": "J000061", "person_uid": "P000048", "node": "A", "at": "2026-08-14T13:47:01+09:00", "path": "/fixture/J000061/A.jpg", "quality": 0.9056},
+    {"journey_id": "J000061", "person_uid": "P000048", "node": "C", "at": "2026-08-14T13:47:07+09:00", "path": "/fixture/J000061/C.jpg", "quality": 0.7533},
+    {"journey_id": "J000061", "person_uid": "P000048", "node": "D", "at": "2026-08-14T13:47:12.379+09:00", "path": "/fixture/J000061/D.jpg", "quality": 0.7315},
+    {"journey_id": "J000062", "person_uid": "P000049", "node": "A", "at": "2026-08-14T13:47:36+09:00", "path": "/fixture/J000062/A.jpg", "quality": 0.9237},
+    {"journey_id": "J000062", "person_uid": "P000049", "node": "C", "at": "2026-08-14T13:47:43+09:00", "path": "/fixture/J000062/C.jpg", "quality": 0.7360},
+    {"journey_id": "J000062", "person_uid": "P000049", "node": "D", "at": "2026-08-14T13:47:48.172+09:00", "path": "/fixture/J000062/D.jpg", "quality": 0.7619}
+  ]
+}

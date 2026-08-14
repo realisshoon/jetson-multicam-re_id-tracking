@@ -1,0 +1,42 @@
+[
+  {
+    "case_id": "J000007",
+    "best_journey_score": 0.791592,
+    "second_journey_score": 0.0,
+    "journey_margin": 0.791592,
+    "confirmation_sample_count": 5,
+    "confirmation_pass_count": 5,
+    "eligibility_reason": "UNSUPPORTED_LOCAL_STATE",
+    "expected_reason": "ELIGIBILITY_REASON_NOT_ALLOWED"
+  },
+  {
+    "case_id": "J000013",
+    "best_journey_score": 0.715393,
+    "second_journey_score": 0.603495,
+    "journey_margin": 0.111898,
+    "confirmation_sample_count": 1,
+    "confirmation_pass_count": 1,
+    "eligibility_reason": "ELIGIBLE_NEW_ENTRY",
+    "expected_reason": "INSUFFICIENT_CONFIRMATION_SAMPLES"
+  },
+  {
+    "case_id": "J000016",
+    "best_journey_score": 0.712994,
+    "second_journey_score": 0.692994,
+    "journey_margin": 0.02,
+    "confirmation_sample_count": 5,
+    "confirmation_pass_count": 4,
+    "eligibility_reason": "ELIGIBLE_NEW_ENTRY",
+    "expected_reason": "INSUFFICIENT_JOURNEY_MARGIN"
+  },
+  {
+    "case_id": "J000019",
+    "best_journey_score": 0.803515,
+    "second_journey_score": 0.730653,
+    "journey_margin": 0.072862,
+    "confirmation_sample_count": 5,
+    "confirmation_pass_count": 4,
+    "eligibility_reason": "ELIGIBLE_NEW_ENTRY",
+    "expected_reason": null
+  }
+]

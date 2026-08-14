@@ -1,0 +1,23 @@
+d_arrival:
+  # 현장 NTP 오차 측정 전에는 작은 전송/직렬화 오차만 허용한다.
+  clock_tolerance_seconds: 1.0
+
+  # J000452의 0초 이동은 차단하되 현장 동선 측정 전 임의로 크게 잡지 않는다.
+  minimum_travel_seconds: 1.0
+  maximum_travel_seconds: 300.0
+
+  # D의 다중 프레임 합의와 Journey 간 분리 기준.
+  minimum_confirmation_samples: 3
+  minimum_confirmation_passes: 2
+  minimum_journey_margin: 0.05
+
+  # 기존 WAITING_D TTL과 동일한 중앙 만료 기준.
+  waiting_d_ttl_seconds: 300.0
+
+  eligible_reasons:
+    - ELIGIBLE
+    # Camera D production contract: a track first observed after the central
+    # passage and confirmed across frames is reported with this reason.
+    - ELIGIBLE_NEW_ENTRY
+    - CONFIRMED
+    - MULTIFRAME_CONFIRMED
