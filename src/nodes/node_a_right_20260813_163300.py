@@ -94,7 +94,7 @@ DASHBOARD_HEIGHT = 175
 # ENTRY LINE
 # ============================================================
 
-ENTRY_LINE_X_RATIO = 0.40
+ENTRY_LINE_X_RATIO = 0.50
 ENTRY_DIRECTION = "right"  # right 또는 left
 
 

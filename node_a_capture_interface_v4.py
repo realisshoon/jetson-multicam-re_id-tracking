@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import json
 import queue
-import re
 import threading
 import time
 import uuid
@@ -94,7 +93,7 @@ DASHBOARD_HEIGHT = 175
 # ENTRY LINE
 # ============================================================
 
-ENTRY_LINE_X_RATIO = 0.40
+ENTRY_LINE_X_RATIO = 0.50
 ENTRY_DIRECTION = "right"  # right 또는 left
 
 
@@ -2671,264 +2670,101 @@ def draw_entry_guide(
     frame_width: int,
     frame_height: int,
 ) -> None:
-    """
-    Camera A ENTRY 가이드 UI.
-
-    목표:
-    - 하단 Dashboard 없이 카메라 화면만 표시
-    - ENTRY 선은 기존보다 굵고 눈에 잘 띄게 표시
-    - 과한 문구/영역 색칠 없이 관제 화면 느낌의 최소 UI 유지
-    - 좌측 상단 LIVE / CAM A 표시
-    """
-
-    # OpenCV BGR
-    line_color = (255, 210, 70)
-    text_color = (245, 248, 250)
-    muted_color = (185, 195, 205)
-    panel_color = (16, 20, 26)
-    live_color = (90, 90, 255)
-
-    # ---------------------------------------------------------
-    # 1. ENTRY LINE GLOW
-    # ---------------------------------------------------------
-    glow = frame.copy()
-
-    cv2.line(
-        glow,
-        (line_x, 0),
-        (line_x, frame_height),
-        line_color,
-        12,
-        cv2.LINE_AA,
-    )
-
-    cv2.addWeighted(
-        glow,
-        0.12,
-        frame,
-        0.88,
-        0,
-        frame,
-    )
-
-    # 실제 ENTRY 선: 기존 2px -> 4px
-    cv2.line(
-        frame,
-        (line_x, 0),
-        (line_x, frame_height),
-        line_color,
-        4,
-        cv2.LINE_AA,
-    )
-
-    font = cv2.FONT_HERSHEY_SIMPLEX
-
-    # ---------------------------------------------------------
-    # 2. 좌측 상단 LIVE / CAM A
-    # ---------------------------------------------------------
-    hud_x1 = 18
-    hud_y1 = 18
-    hud_x2 = 172
-    hud_y2 = 54
-
-    hud_overlay = frame.copy()
-    cv2.rectangle(
-        hud_overlay,
-        (hud_x1, hud_y1),
-        (hud_x2, hud_y2),
-        panel_color,
-        -1,
-    )
-
-    cv2.addWeighted(
-        hud_overlay,
-        0.72,
-        frame,
-        0.28,
-        0,
-        frame,
-    )
-
-    # LIVE indicator
-    cv2.circle(
-        frame,
-        (hud_x1 + 16, hud_y1 + 18),
-        5,
-        live_color,
-        -1,
-        cv2.LINE_AA,
-    )
-
-    cv2.putText(
-        frame,
-        "LIVE",
-        (hud_x1 + 29, hud_y1 + 24),
-        font,
-        0.48,
-        text_color,
-        1,
-        cv2.LINE_AA,
-    )
-
-    cv2.putText(
-        frame,
-        "CAM A",
-        (hud_x1 + 88, hud_y1 + 24),
-        font,
-        0.48,
-        muted_color,
-        1,
-        cv2.LINE_AA,
-    )
-
-    # ---------------------------------------------------------
-    # 3. ENTRY 라벨
-    # ---------------------------------------------------------
-    label_text = "ENTRY"
-    font_scale = 0.62
-    thickness = 1
-
-    (label_w, label_h), _ = cv2.getTextSize(
-        label_text,
-        font,
-        font_scale,
-        thickness,
-    )
-
-    label_x1 = max(
-        12,
-        min(
-            frame_width - label_w - 34,
-            line_x - label_w // 2 - 16,
-        ),
-    )
-    label_y1 = 18
-    label_x2 = label_x1 + label_w + 32
-    label_y2 = label_y1 + label_h + 22
-
-    label_overlay = frame.copy()
-
-    cv2.rectangle(
-        label_overlay,
-        (label_x1, label_y1),
-        (label_x2, label_y2),
-        panel_color,
-        -1,
-    )
-
-    cv2.addWeighted(
-        label_overlay,
-        0.72,
-        frame,
-        0.28,
-        0,
-        frame,
-    )
-
-    # ENTRY 라벨 아래에 작은 강조선
-    cv2.line(
-        frame,
-        (label_x1 + 10, label_y2 - 4),
-        (label_x2 - 10, label_y2 - 4),
-        line_color,
-        2,
-        cv2.LINE_AA,
-    )
-
-    cv2.putText(
-        frame,
-        label_text,
-        (label_x1 + 16, label_y2 - 11),
-        font,
-        font_scale,
-        text_color,
-        thickness,
-        cv2.LINE_AA,
-    )
-
-    # ---------------------------------------------------------
-    # 4. ENTRY 방향 표시
-    # ---------------------------------------------------------
-    arrow_y = 86
-    arrow_length = 92
+    overlay = frame.copy()
 
     if ENTRY_DIRECTION == "right":
-        arrow_start = (
-            max(26, line_x - arrow_length - 28),
-            arrow_y,
-        )
-        arrow_end = (
-            max(36, line_x - 28),
-            arrow_y,
-        )
-
-        direction_text = "ENTRY"
-        text_x = max(
-            18,
-            arrow_start[0] - 68,
-        )
+        start_left = 0
+        start_right = line_x
+        entry_left = line_x
+        entry_right = frame_width
+        arrow_start = (max(40, line_x - 220), 90)
+        arrow_end = (min(frame_width - 40, line_x + 220), 90)
+        direction_text = "MOVE RIGHT >>>"
 
     elif ENTRY_DIRECTION == "left":
-        arrow_start = (
-            min(frame_width - 26, line_x + arrow_length + 28),
-            arrow_y,
-        )
-        arrow_end = (
-            min(frame_width - 36, line_x + 28),
-            arrow_y,
-        )
-
-        direction_text = "ENTRY"
-        text_x = min(
-            frame_width - 78,
-            arrow_start[0] + 12,
-        )
+        start_left = line_x
+        start_right = frame_width
+        entry_left = 0
+        entry_right = line_x
+        arrow_start = (min(frame_width - 40, line_x + 220), 90)
+        arrow_end = (max(40, line_x - 220), 90)
+        direction_text = "<<< MOVE LEFT"
 
     else:
         raise ValueError(
             "ENTRY_DIRECTION은 'right' 또는 'left'여야 합니다."
         )
 
-    # 화살표 shadow/glow
-    arrow_glow = frame.copy()
+    cv2.rectangle(
+        overlay,
+        (start_left, 0),
+        (start_right, frame_height),
+        (0, 140, 255),
+        -1,
+    )
+    cv2.rectangle(
+        overlay,
+        (entry_left, 0),
+        (entry_right, frame_height),
+        (0, 180, 0),
+        -1,
+    )
+    cv2.addWeighted(overlay, 0.14, frame, 0.86, 0, frame)
+
+    cv2.line(
+        frame,
+        (line_x, 0),
+        (line_x, frame_height),
+        (0, 255, 255),
+        4,
+    )
     cv2.arrowedLine(
-        arrow_glow,
+        frame,
         arrow_start,
         arrow_end,
-        line_color,
-        7,
-        cv2.LINE_AA,
-        tipLength=0.20,
+        (0, 255, 255),
+        5,
+        tipLength=0.12,
     )
 
-    cv2.addWeighted(
-        arrow_glow,
-        0.12,
-        frame,
-        0.88,
-        0,
-        frame,
-    )
-
-    cv2.arrowedLine(
-        frame,
-        arrow_start,
-        arrow_end,
-        line_color,
-        2,
-        cv2.LINE_AA,
-        tipLength=0.20,
-    )
+    start_center_x = (start_left + start_right) // 2
+    entry_center_x = (entry_left + entry_right) // 2
 
     cv2.putText(
         frame,
+        "START SIDE",
+        (max(10, start_center_x - 95), frame_height - 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (255, 255, 255),
+        2,
+    )
+    cv2.putText(
+        frame,
+        "ENTRY SIDE",
+        (max(10, entry_center_x - 95), frame_height - 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (255, 255, 255),
+        2,
+    )
+    cv2.putText(
+        frame,
         direction_text,
-        (text_x, arrow_y + 6),
-        font,
-        0.46,
-        muted_color,
-        1,
-        cv2.LINE_AA,
+        (20, 40),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.9,
+        (0, 255, 255),
+        3,
+    )
+    cv2.putText(
+        frame,
+        "CROSS THIS LINE",
+        (max(10, line_x - 120), 135),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (0, 255, 255),
+        2,
     )
 
 
@@ -2964,13 +2800,108 @@ def identity_label_and_color(
 
 
 def draw_dashboard(frame: np.ndarray) -> np.ndarray:
-    """
-    과거에는 카메라 아래에 DASHBOARD_HEIGHT만큼 검은 정보 패널을 붙였지만,
-    현재는 웹 스트림에서 카메라 영상만 그대로 반환한다.
+    frame_height, frame_width = frame.shape[:2]
 
-    함수 이름은 기존 호출부 호환을 위해 유지한다.
-    """
-    return frame
+    dashboard = np.zeros(
+        (frame_height + DASHBOARD_HEIGHT, frame_width, 3),
+        dtype=np.uint8,
+    )
+    dashboard[:frame_height] = frame
+
+    panel_top = frame_height
+
+    cv2.rectangle(
+        dashboard,
+        (0, panel_top),
+        (frame_width, frame_height + DASHBOARD_HEIGHT),
+        (20, 24, 31),
+        -1,
+    )
+    cv2.line(
+        dashboard,
+        (0, panel_top),
+        (frame_width, panel_top),
+        (90, 105, 125),
+        1,
+    )
+
+    cv2.putText(
+        dashboard,
+        "CAMERA A | ENTRY MANAGEMENT",
+        (20, panel_top + 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.72,
+        (255, 255, 255),
+        2,
+    )
+    cv2.putText(
+        dashboard,
+        "ROUTE: [A] -> B/C -> D | FACE WORKER ON",
+        (20, panel_top + 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.64,
+        (0, 220, 255),
+        2,
+    )
+
+    with identity_lock:
+        results_snapshot = list(recent_results)
+
+    if not results_snapshot:
+        cv2.putText(
+            dashboard,
+            "Waiting for entry line crossing...",
+            (20, panel_top + 100),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            (170, 180, 195),
+            1,
+        )
+        return dashboard
+
+    for index, identity in enumerate(results_snapshot[:3]):
+        y = panel_top + 95 + index * 25
+        score_text = (
+            f"{identity.match_score:.3f}"
+            if identity.match_score is not None
+            else "-"
+        )
+        review_text = ""
+        if (
+            identity.person_status.upper() == "REVIEW_REQUIRED"
+            and identity.candidate_person_uid
+        ):
+            review_text = f" | Cand {identity.candidate_person_uid}"
+
+        entry_time_text = "-"
+        if identity.entry_at:
+            try:
+                entry_time_text = datetime.fromisoformat(
+                    identity.entry_at
+                ).strftime("%H:%M:%S")
+            except ValueError:
+                entry_time_text = identity.entry_at
+
+        line = (
+            f"{identity.person_uid} | "
+            f"{identity.person_status} | "
+            f"{identity.journey_id} | "
+            f"Entry {entry_time_text} | "
+            f"Visits {identity.visit_count} | "
+            f"Score {score_text}"
+            f"{review_text}"
+        )
+        cv2.putText(
+            dashboard,
+            line,
+            (20, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.54,
+            (220, 226, 235),
+            1,
+        )
+
+    return dashboard
 
 
 # ============================================================
