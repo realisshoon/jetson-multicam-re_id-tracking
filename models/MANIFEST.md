@@ -8,7 +8,7 @@ missing runtime model and point back to this document.
 |---|---|---|---:|---|
 | `yolo26n.pt` | A, B, D | YOLO person detection and tracking | 5,544,453 bytes | `9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef` |
 | `models/reid/person_reid_osnet_x0_25.onnx` | Engine build | Portable OSNet source model | 901,041 bytes | `1d8f60f93a4723da4564d9c8cdf4957540bb9fe62ee92a5bf33feac225566677` |
-| `models/reid/person_reid_osnet_x0_25_fp16.engine` | A, B, D | TensorRT OSNet Re-ID inference | 1,656,508 bytes | `134d04c85f565739851136a80b149a7da480b697be90c1507501d0a21d62ea6d` |
+| `models/reid/person_reid_osnet_x0_25_fp16.engine` | A, B, C, D | TensorRT OSNet Re-ID inference | 1,656,508 bytes | `134d04c85f565739851136a80b149a7da480b697be90c1507501d0a21d62ea6d` |
 | `models/face/face_detection_yunet_2023mar.onnx` | A | YuNet face detection | 232,589 bytes | `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4` |
 
 The TensorRT `.engine` is environment-dependent. Generate or copy it only
