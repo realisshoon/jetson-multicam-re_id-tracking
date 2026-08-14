@@ -250,6 +250,27 @@ button{font-family:inherit}
 .det-badge:disabled{opacity:.3;cursor:default}
 .det-badge.resolved{border-color:var(--rule-2);color:var(--dimmer)}
 
+/* ── 미등록자 리스트: B·C·D 감지만 모아 실시간으로 훑어보는 단순 목록
+   (2026-08-14) — "보류 리스트"(카메라별 고정 4줄 + 카드 넘기기)와 달리
+   시간순으로 쌓이는 리스트 형태로, 사진·시간·카메라만 빠르게 확인하는
+   용도다. A(등록완료/실패 전용)는 제외한다 — "미등록자 감지"라는 개념
+   자체가 B·C·D 경고음과 짝인 것과 같다. */
+.stranger-list{display:flex;flex-direction:column;max-height:360px;overflow-y:auto}
+.stranger-row{display:flex;align-items:center;gap:10px;padding:8px 14px;
+  border-bottom:1px solid var(--rule)}
+.stranger-row:last-child{border-bottom:0}
+.stranger-thumb{flex:0 0 auto;width:32px;height:42px;object-fit:cover;border-radius:3px;
+  background:#000;border:1px solid var(--rule)}
+.stranger-thumb.is-empty{display:grid;place-items:center;font-family:var(--mono);
+  font-size:6.5px;color:var(--dimmer);text-align:center;line-height:1.2}
+.stranger-cam{flex:0 0 auto;width:26px;height:26px;display:grid;place-items:center;
+  border:1px solid var(--alert);border-radius:4px;font-family:var(--mono);
+  font-weight:700;font-size:13px;color:var(--alert)}
+.stranger-time{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px;
+  color:var(--dim)}
+.stranger-person{flex:0 0 auto;font-family:var(--mono);font-size:11.5px;
+  color:var(--dimmer)}
+
 /* 헤더 "상세" 버튼 — 전체 기록 페이지(/detections/)로 이동 */
 .panel-more{flex:0 0 auto;width:auto;height:18px;padding:0 8px;
   display:grid;place-items:center;border:1px solid var(--rule-2);border-radius:3px;
@@ -520,6 +541,22 @@ a.jr-thumblink{display:block;line-height:0}
           </div>
           {% endwith %}
           {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" data-collapsible="strangers">
+      <h2 tabindex="0" role="button" aria-expanded="true">
+        <span>미등록자 리스트 <span id="stranger-count">0</span></span>
+        <span class="h2-right">
+          <a class="panel-more" href="{% url 'detections' %}" title="전체 기록 보기"
+             onclick="event.stopPropagation()">상세</a>
+          <span class="chev">▾</span>
+        </span>
+      </h2>
+      <div class="panel-body">
+        <div class="stranger-list" id="stranger-list">
+          <p class="empty">불러오는 중…</p>
         </div>
       </div>
     </section>
@@ -881,6 +918,33 @@ function renderDetRow(camIdx){
 
 function renderAllDetRows(){
   document.querySelectorAll('.det-row').forEach(row => renderDetRow(row.dataset.cam));
+}
+
+// "미등록자 리스트" — B·C·D 감지만 시간순으로 모아 보여주는 실시간 목록
+// (2026-08-14, "보류 리스트" 밑에 배치). cam_detections 는 이미 카메라별로
+// 버킷돼 있으니(§api_state), A(등록완료/실패 전용, "미등록자" 개념과
+// 무관)만 빼고 나머지를 한 줄로 합쳐서 최신순으로 자른다.
+function renderStrangerList(camDetections){
+  const items = [];
+  Object.entries(camDetections || {}).forEach(([camIdx, list]) => {
+    const L = camLabel[camIdx];
+    if(L === 'A') return;
+    (list || []).forEach(d => items.push({...d, camLabel: L || '?'}));
+  });
+  items.sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+  const top = items.slice(0, 30);
+
+  document.getElementById('stranger-count').textContent = items.length;
+  const box = document.getElementById('stranger-list');
+  box.innerHTML = top.length ? top.map(d => `
+    <div class="stranger-row">
+      ${d.thumb_url
+        ? `<img class="stranger-thumb" src="${esc(d.thumb_url)}" alt="" loading="lazy">`
+        : '<div class="stranger-thumb is-empty">NO IMG</div>'}
+      <span class="stranger-cam">${esc(d.camLabel)}</span>
+      <span class="stranger-time">${esc(d.at) || '—'}</span>
+      <span class="stranger-person">${esc(d.person_uid || d.person || '')}</span>
+    </div>`).join('') : '<p class="empty">아직 미등록자 감지 기록이 없다.</p>';
 }
 
 document.querySelectorAll('.det-row').forEach(row => {
@@ -1300,6 +1364,7 @@ function render(d){
   // "미등록자 감지 기록" — 카메라 4대 고정 줄, 줄마다 </> 로 하나씩 넘겨본다.
   lastCamDetections = d.cam_detections || {};
   renderAllDetRows();
+  renderStrangerList(lastCamDetections);
 }
 
 async function poll(){

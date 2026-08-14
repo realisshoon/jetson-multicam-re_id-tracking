@@ -6,11 +6,15 @@
 <title>이동 목록 · 열정강혁 통합관제</title>
 <link rel="stylesheet" href="{% static 'tracking/journey_pages.css' %}">
 <style>
-.j-thumb{width:36px;height:48px;object-fit:cover;border-radius:3px;
+/* 2026-08-14: "리스트 한 줄당 높이를 2칸 정도로, 사진도 그에 맞게" 요청
+   — 사진을 정확히 2배(36x48 -> 72x96)로 키우고, 표 행 세로 패딩도 같이
+   늘려서 행 전체가 넉넉해지게 한다(#review-body/#recent-body 공유). */
+.j-thumb{width:72px;height:96px;object-fit:cover;border-radius:4px;
   background:#000;border:1px solid var(--rule)}
 .j-thumb-empty{display:grid;place-items:center;font-family:var(--mono);
-  font-size:7px;color:var(--dimmer);width:36px;height:48px;border-radius:3px;
+  font-size:11px;color:var(--dimmer);width:72px;height:96px;border-radius:4px;
   background:#000;border:1px solid var(--rule)}
+#review-body td,#recent-body td{padding-top:16px;padding-bottom:16px}
 .pid.pending{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;
   text-underline-offset:3px}
 .pid.pending:hover{color:var(--calm)}

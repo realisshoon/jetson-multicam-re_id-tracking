@@ -34,10 +34,14 @@ tr.date-sep:hover td{background:var(--panel-3)}
 .pager{display:flex;gap:14px;align-items:center;justify-content:center;padding:14px;
   font-family:var(--mono);font-size:13px;border-top:1px solid var(--rule)}
 tr.resolved{opacity:.55}
-.det-thumb{width:44px;height:58px;object-fit:cover;border-radius:3px;
+/* 2026-08-14: 이동 목록과 같은 요청("한 줄당 높이를 2칸 정도로, 사진도
+   그에 맞게") — 사진을 정확히 2배(44x58 -> 88x116)로 키우고, 표 행
+   세로 패딩도 같이 늘려서 행 전체가 넉넉해지게 한다. */
+.det-thumb{width:88px;height:116px;object-fit:cover;border-radius:4px;
   background:#000;border:1px solid var(--rule)}
 .det-thumb-empty{display:grid;place-items:center;font-family:var(--mono);
-  font-size:8.5px;color:var(--dimmer);text-align:center}
+  font-size:12px;color:var(--dimmer);text-align:center}
+#det-body td{padding-top:16px;padding-bottom:16px}
 
 /* ── "오류" 처리 후보 선택 모달 (dashboard.html 과 동일) ───────────── */
 .review-modal{position:fixed;inset:0;z-index:100;display:flex;
