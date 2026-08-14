@@ -19,6 +19,11 @@ from ultralytics import YOLO
 from src.common.config import load_mqtt_config
 from src.common.journey import build_passage_payload
 from src.common.model_requirements import require_model_files
+from src.common.stranger_detection import (
+    STRANGER_DETECTION_TOPICS,
+    StrangerDetectionGate,
+    publish_stranger_detection,
+)
 from src.reid.reid_engine import ReIDTensorRTEngine
 
 
@@ -38,6 +43,7 @@ MQTT_PORT = MQTT_CONFIG.port
 MQTT_QOS = MQTT_CONFIG.qos
 CANDIDATE_TOPIC = "cctv/candidates/b"
 PASSAGE_TOPIC = "cctv/events/b/passage"
+DETECTION_TOPIC = STRANGER_DETECTION_TOPICS["B"]
 
 CAPTURE_ROOT = ROOT / "outputs" / "captures" / "B"
 
@@ -557,6 +563,7 @@ def on_connect(client, userdata, flags, reason_code, properties) -> None:
     client.subscribe(CANDIDATE_TOPIC, qos=MQTT_QOS)
     print(f"Camera B MQTT 구독: {CANDIDATE_TOPIC}")
     print(f"Camera B MQTT 발행: {PASSAGE_TOPIC}")
+    print(f"Camera B MQTT 발행: {DETECTION_TOPIC}")
 
 
 def on_message(client, userdata, message) -> None:
@@ -904,6 +911,7 @@ def main() -> None:
     # PASSAGE 시 저장할 가장 품질 좋은 B Crop
     best_capture_by_local_id: dict[int, np.ndarray] = {}
     best_capture_quality_by_local_id: dict[int, float] = {}
+    stranger_gate = StrangerDetectionGate("B")
 
     frame_index = 0
     mqtt_client: mqtt.Client | None = None
@@ -918,6 +926,7 @@ def main() -> None:
         print(f"웹 포트        : {WEB_PORT}")
         print(f"B Gallery 목표 : {B_GALLERY_TARGET}")
         print(f"B -> Main 토픽  : {PASSAGE_TOPIC}")
+        print(f"미등록 감지 토픽: {DETECTION_TOPIC}")
         print(f"Capture 저장    : {CAPTURE_ROOT}")
         print(
             f"밝기 보정       : "
@@ -967,6 +976,7 @@ def main() -> None:
                 for local_id, box, confidence in zip(local_ids, boxes, confs):
                     first_seen.setdefault(local_id, time.time())
                     last_seen[local_id] = frame_index
+                    reid_observation_valid = False
                     x1, y1, x2, y2 = box
 
                     if (frame_index + local_id) % REID_INTERVAL_FRAMES == 0:
@@ -983,6 +993,7 @@ def main() -> None:
                             )
                             history.append(current_embedding)
                             avg_embedding = average(history)
+                            reid_observation_valid = True
 
                             journey_id = global_ids.get(local_id)
 
@@ -1195,6 +1206,23 @@ def main() -> None:
                         except Exception as error:
                             print(f"[B Re-ID 오류] Local={local_id}: {error}")
 
+                    if reid_observation_valid and mqtt_client is not None:
+                        detection_payload = stranger_gate.observe(
+                            local_track_id=local_id,
+                            observed_at=datetime.now().astimezone(),
+                            is_unregistered=local_id not in global_ids,
+                            matching_in_progress=(
+                                tentative_id.get(local_id) is not None
+                            ),
+                        )
+                        if detection_payload is not None:
+                            publish_stranger_detection(
+                                mqtt_client,
+                                DETECTION_TOPIC,
+                                detection_payload,
+                                qos=MQTT_QOS,
+                            )
+
                     journey_id = global_ids.get(local_id)
                     if journey_id is not None:
                         reference = candidate_reference(journey_id)
@@ -1265,6 +1293,7 @@ def main() -> None:
             ]
 
             for local_id in stale_ids:
+                stranger_gate.remove_track(local_id)
                 journey_id = global_ids.get(local_id)
                 if journey_id:
                     release_candidate(journey_id, local_id, "TRACK_LOST")

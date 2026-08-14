@@ -17,7 +17,7 @@ CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 720
 CAMERA_FPS = 30
 
-SERVER_PORT = 8002
+SERVER_PORT = 8003
 
 FLIP_HORIZONTAL = True
 
@@ -270,7 +270,7 @@ def main() -> None:
 
             cv2.putText(
                 frame,
-                "/dev/video4 - PORT 8002",
+                "/dev/video4 - PORT 8003",
                 (20, 80),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.70,
