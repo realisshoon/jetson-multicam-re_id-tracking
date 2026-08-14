@@ -245,11 +245,21 @@ def _detection_dict(e: Event) -> dict:
         # 2026-08-13: Main 대표사진이 있으면 1순위(§_representative_thumb_url)
         # — 이 Event 는 항상 신원 확정된 사람만 생기므로 external_id 가 있다.
         "thumb_url": _representative_thumb_url(e.person.external_id) or _thumb_url(e.journey),
-        # 이 감지 자체는 신원까지 확정된 뒤에만 생기는 Event 라 "후보와
-        # 헷갈린" 게 아니다 — Journey 기반 항목(_journey_review_dict)만
-        # candidates 를 채운다. 프런트가 카드 종류(kind)와 무관하게 같은
-        # 모양을 쓸 수 있게 빈 배열로 맞춰둔다.
-        "candidates": [],
+        # 2026-08-14: 이 Event 는 신원까지 이미 확정된 뒤에만 생긴다(Main
+        # 이 candidate_person_uid 를 준 적도 없다 — 애매해서 헷갈린 게
+        # 아니라 그냥 아직 관리자 검수 전이라 "미등록"으로만 보이는
+        # 것뿐). 예전엔 이 경우 candidates 를 비워서 "데이터 선택" 모달을
+        # 열어도 아무 후보도 안 떴는데, Main 이 이미 알려준 신원
+        # (e.person)을 그냥 숨기는 셈이라 관리자가 헷갈렸다("후보가 떠야
+        # 하는데 안 뜬다" 보고, 2026-08-14) — 이제 그 확정 신원 자체를
+        # 유일한 candidate 로 채워서 모달이 그대로 기본 선택해준다.
+        # is_known=True 로 표시해서 프런트가 "메인 서버 추정 후보"(진짜
+        # 애매한 추정)와 "메인 서버 확정 인물"(이미 확실함)을 다른
+        # 문구로 보여줄 수 있게 한다.
+        "candidates": ([{"person_uid": e.person.external_id,
+                        "thumb_url": _representative_thumb_url(e.person.external_id),
+                        "is_known": True}]
+                      if e.person.external_id else []),
         "final_score": None,
     }
 
@@ -279,7 +289,7 @@ def _journey_review_dict(j: Journey) -> dict:
         "review_status_label": j.get_review_status_display() if j.review_status else "",
         "resolved_person": j.local_match_person.external_id if j.local_match_person_id else None,
         "thumb_url": _thumb_url(j),
-        "candidates": [{"person_uid": uid, "thumb_url": _local_thumb_for_uid(uid)}
+        "candidates": [{"person_uid": uid, "thumb_url": _local_thumb_for_uid(uid), "is_known": False}
                        for uid in candidate_uids],
         "final_score": j.final_score,
     }
@@ -716,7 +726,14 @@ def api_person_search(request):
     검색 대상이 너무 좁았다. 이제 캐시된 Main persons 목록(§_main_representative_urls
     와 같은 4초 캐시 재사용)에서 검색하고, 로컬에 매칭되는 사람이 있으면
     이름/확인여부/사진을 얹는다. Main 이 응답 안 하면 예전처럼 로컬
-    테이블로 폴백한다."""
+    테이블로 폴백한다.
+
+    2026-08-14: "가장 비슷한 순으로 정렬해달라" 요청 — 진짜 얼굴 유사도
+    검색은 지금 구조로 불가능하다(임베딩 인프라 자체가 없음, Snapshot.
+    embedding 이 항상 비어있음 확인됨). 대신 있는 정보로 실제로 도움이
+    되는 순서를 만든다: 사진이 아예 없는 후보는 봐도 비교가 안 되니
+    맨 뒤로 밀고, 사진 있는 후보끼리는 최근 방문 순으로 둔다 — "훑어보며
+    비교"에 실질적으로 쓸모있는 순서."""
     q = request.GET.get("q", "").strip().upper()
     items = cache.get(MAIN_PERSONS_CACHE_KEY)
     if items is None:
@@ -736,7 +753,8 @@ def api_person_search(request):
 
         filtered = [it for it in items if it.get("person_uid")
                    and (not q or _matches(it["person_uid"]))]
-        filtered.sort(key=lambda it: it.get("last_seen_at") or "", reverse=True)
+        filtered.sort(key=lambda it: (bool(it.get("representative_image_url")),
+                                      it.get("last_seen_at") or ""), reverse=True)
         results = []
         for it in filtered[:20]:
             uid = it["person_uid"]

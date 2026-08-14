@@ -747,7 +747,7 @@ function openConfusionModal(item){
       ${c.thumb_url ? `<img src="${esc(c.thumb_url)}" alt="" loading="lazy">`
                     : '<div class="confusion-cand-noimg">NO IMG</div>'}
       <div class="confusion-cand-info">
-        <span class="confusion-cand-tag">메인 서버 추정 후보</span>
+        <span class="confusion-cand-tag">${c.is_known ? '메인 서버 확정 인물' : '메인 서버 추정 후보'}</span>
         <span class="confusion-cand-id">candidate : ${esc(c.person_uid)}</span>
       </div>
     </button>`).join('');
