@@ -1,6 +1,6 @@
 model:
   name: osnet_x0_25
-  file: models/person_reid_osnet_x0_25.onnx
+  file: models/reid/person_reid_osnet_x0_25.onnx
   format: onnx
   opset: 17
   input_name: images
