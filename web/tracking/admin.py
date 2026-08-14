@@ -1,8 +1,11 @@
 from django.contrib import admin, messages
+from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+from django.contrib.auth.models import User
 from django.utils.html import format_html, format_html_join
 
 from . import bus, services
-from .models import Camera, Event, Person, RuntimeConfig, Snapshot, Tracklet
+from .models import (Camera, Event, Journey, Person, RuntimeConfig, Snapshot,
+                     Tracklet)
 
 
 # ==================================================================== 인물
@@ -159,6 +162,31 @@ class EventAdmin(admin.ModelAdmin):
     date_hierarchy = "at"
 
 
+@admin.register(Journey)
+class JourneyAdmin(admin.ModelAdmin):
+    """메인 서버(B)가 신원의 source of truth 다 — 여긴 조회 전용.
+    실제 MERGE_EXISTING/CONFIRM_NEW 액션은 나중에 REST API 로 붙일
+    예정이라(2026-08-11 B 지시) 지금은 필드 전부 readonly."""
+    list_display = ("journey_id", "display_person_uid_col", "final_review_result",
+                    "journey_status", "person_status", "route", "entry_at",
+                    "journey_elapsed_seconds", "final_score", "visit_count")
+    list_filter = ("final_review_result", "journey_status", "person_status")
+    search_fields = ("journey_id", "canonical_person_uid", "temporary_person_uid",
+                     "candidate_person_uid", "final_candidate_person_uid")
+    date_hierarchy = "entry_at"
+    readonly_fields = [f.name for f in Journey._meta.fields]
+
+    def display_person_uid_col(self, obj):
+        return obj.display_person_uid() or "—"
+    display_person_uid_col.short_description = "Person ID"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(RuntimeConfig)
 class RuntimeConfigAdmin(admin.ModelAdmin):
     list_display = ("__str__", "det_conf", "reid_threshold", "max_gallery",
@@ -179,3 +207,33 @@ class RuntimeConfigAdmin(admin.ModelAdmin):
                          draw_boxes=obj.draw_boxes,
                          draw_labels=obj.draw_labels)
         self.message_user(request, "설정을 tracker 에 반영했다", messages.INFO)
+
+
+# ==================================================================== 사용자
+# 기본 "Users" 메뉴를 "사용자관리"로 보이게, User 를 프록시로 다시 등록한다
+# (실제 테이블/모델은 그대로 auth_user 다 — 그냥 admin 사이드바 표시 이름만
+# 바꾸는 거라 프록시 모델이 정석). settings.py 의 INSTALLED_APPS 순서상
+# auth 가 tracking 보다 먼저 로드되므로, 여기서 unregister(User) 할 때는
+# 이미 auth.admin 이 등록해 둔 뒤라 정상적으로 바꿔치기된다.
+class UserProxy(User):
+    class Meta:
+        proxy = True
+        verbose_name = "사용자"
+        verbose_name_plural = "사용자관리"
+
+
+admin.site.unregister(User)
+
+
+@admin.register(UserProxy)
+class UserManagementAdmin(DjangoUserAdmin):
+    """관리자가 '사용자 추가'로 계정을 만들면 그 즉시 로그인해서 대시보드를
+    쓸 수 있어야 한다. 근데 Django 기본 "사용자 추가" 폼은 아이디/비밀번호만
+    받고 '스태프 권한(is_staff)' 은 기본 꺼진 채로 만들어진다 — 로그인
+    게이트가 /admin/login/ 인데 이건 is_staff 없으면 비밀번호가 맞아도
+    로그인을 거부한다. 그래서 저장 시점에 새 계정이면 항상 is_staff=True
+    로 만들어서, 만들자마자 바로 로그인되게 한다."""
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.is_staff = True
+        super().save_model(request, obj, form, change)

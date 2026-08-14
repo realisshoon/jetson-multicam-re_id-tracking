@@ -37,25 +37,24 @@ button{font-family:inherit}
 /* ── 상단 바 ──────────────────────────────────────────────────────── */
 .bar{display:flex;align-items:center;gap:20px;flex-wrap:wrap;
   border:1px solid var(--rule);background:var(--panel);
-  padding:10px 16px;border-radius:4px;margin-bottom:12px}
-.brand{font-family:var(--mono);font-size:13.2px;letter-spacing:.2em;
-  text-transform:uppercase;color:var(--dim);white-space:nowrap}
-.rec{display:inline-block;width:8px;height:8px;border-radius:50%;
-  background:var(--alert);margin-right:9px;vertical-align:1px;
-  animation:blink 1.6s steps(1,end) infinite}
-.rec.off{background:var(--dimmer);animation:none}
-@keyframes blink{0%,55%{opacity:1}56%,100%{opacity:.15}}
+  padding:5.76px 16px;border-radius:4px;margin-bottom:12px}
+.brand{display:flex;align-items:center;gap:9px;font-family:var(--mono);
+  font-size:13.2px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--dim);white-space:nowrap}
+/* logo_ver2 는 흰 배경을 지운 투명 PNG라 바로 얹어도 튀지 않는다. */
+.brand a{display:block;line-height:0}
+.brand-logo{height:58.3px;width:auto;display:block;transition:opacity .12s}
+.brand-logo:hover{opacity:.85}
 .sep{width:1px;align-self:stretch;background:var(--rule)}
-.metric{font-family:var(--mono);font-size:12.1px;color:var(--dimmer);
+.metric{font-family:var(--mono);font-size:14.5px;color:var(--dimmer);
   letter-spacing:.14em;text-transform:uppercase;white-space:nowrap}
-.metric b{display:block;font-size:25.3px;color:var(--text);font-weight:600;
+.metric b{display:block;font-size:30.4px;color:var(--text);font-weight:600;
   letter-spacing:0;margin-top:1px;font-variant-numeric:tabular-nums}
-.metric b.hot{color:var(--alert)}
 /* 감지 상태 — 카메라 어딘가에서 확인중/등록됨/미등록 사이클이 돌고 있으면
    빨간 배지로 "감지중", 아무 것도 없으면 검정 배지로 "대기중". 글자색만
    바꾸면 어두운 배경에서 눈에 잘 안 띄어서 배경째로 바뀌는 배지로 했다. */
 .detect-pill{display:block;margin-top:1px;padding:3px 10px;border-radius:3px;
-  font-family:var(--mono);font-size:15.4px;font-weight:600;letter-spacing:0;
+  font-family:var(--mono);font-size:18.5px;font-weight:600;letter-spacing:0;
   width:fit-content;background:#000;color:var(--dimmer);
   transition:background-color .15s,color .15s}
 .detect-pill.active{background:var(--alert);color:#fff}
@@ -109,25 +108,38 @@ button{font-family:inherit}
   text-transform:uppercase;color:var(--dim);
   display:flex;justify-content:space-between;align-items:center}
 .panel > h2 span{color:var(--dimmer);font-variant-numeric:tabular-nums}
+/* 접기/펴기 — rail 의 패널 3개(감지 인물/이벤트 기록/여정 통계)에 붙는다.
+   h2 전체를 누를 수 있게 하고, 상태는 localStorage 에 저장해서 새로고침해도 유지된다. */
+.panel[data-collapsible] > h2{cursor:pointer}
+.panel[data-collapsible] > h2:hover{color:var(--text)}
+.panel[data-collapsible] > h2:focus-visible{outline:2px solid var(--calm);outline-offset:-2px}
+.chev{flex:0 0 auto;margin-left:10px;font-size:9px;color:var(--dimmer);
+  transition:transform .15s ease}
+.panel.collapsed .chev{transform:rotate(-90deg)}
+.panel.collapsed > .panel-body{display:none}
+.h2-right{display:flex;align-items:center;gap:8px}
 
 /* ── 카메라 월 (다분할 동시 감시) ─────────────────────────────────── */
-/* WALL_VH 만큼을 카메라 월에 준다 — 화면 높이 기준이라 창 크기가 달라도
-   행 수(2행/3행)만큼 항상 스크롤 없이 한 화면에 꽉 찬다. 화면에 넘치면
-   이 calc() 의 빼는 값(160px)을 늘리거나 줄이면 된다(줄이면 카메라가 커짐). */
-.wall{display:grid;gap:10px;padding:10px;
+/* 2026-08-13 5차 변경: 다시 반응형으로 — 창 크기가 바뀔 때마다 카메라
+   칸 크기도 그에 맞춰 같이 바뀐다(1fr, 뷰포트 높이 기준). 간격만 절반
+   (10px→5px)으로 줄이고, 모서리 브래킷과 상단 그라데이션은 계속 뺀
+   상태로 유지한다. */
+.wall{display:grid;gap:5px;padding:10px;
   grid-template-columns:repeat(2,minmax(0,1fr));
   grid-template-rows:repeat(2,minmax(0,1fr));
-  height:calc(100vh - 160px);min-height:420px}
+  height:calc(100vh - 121px);min-height:420px;overflow:auto}
 .wall[data-n="1"]{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .wall[data-n="5"],.wall[data-n="6"],.wall[data-n="7"],.wall[data-n="8"],
 .wall[data-n="9"]{grid-template-columns:repeat(3,minmax(0,1fr));
   grid-template-rows:repeat(3,minmax(0,1fr))}
-@media(max-width:760px){.wall[data-n]{grid-template-columns:minmax(0,1fr);
-  grid-template-rows:none;height:auto}}
 
 .cam{position:relative;margin:0;background:#000;border:1px solid var(--rule);
   border-radius:3px;overflow:hidden;width:100%;height:100%;transition:border-color .15s}
 .cam img{width:100%;height:100%;object-fit:contain;display:block}
+/* 스트림이 안 열린 상태(연결 끊김)면 브라우저 기본 "깨진 이미지" 아이콘이
+   칸을 꽉 채우며 확대돼서 지저분하게 보인다 — 숨기고 검은 배경 +
+   pill 의 "연결 끊김" 문구로만 보여준다. */
+.cam.st-offline img{visibility:hidden}
 .cam .noimg{display:grid;place-items:center;width:100%;height:100%;
   font-family:var(--mono);font-size:13.2px;letter-spacing:.1em;
   color:var(--dimmer);background:#000}
@@ -138,25 +150,17 @@ button{font-family:inherit}
    붙였다 — 여러 대가 동시에 감지돼도 각자 실시간으로 색이 바뀐다. */
 .cam.st-checking{border-color:var(--warn)}
 .cam.st-registered{border-color:var(--ok)}
-.cam.st-alert{border-color:var(--alert)}
-/* 모서리 브래킷 — 감지된 화면만 상태색으로 잡아준다 */
-.cam .bk{position:absolute;width:18px;height:18px;pointer-events:none;
-  border:2px solid var(--rule-2);transition:border-color .15s}
-.cam .bk.tl{top:6px;left:6px;border-right:0;border-bottom:0}
-.cam .bk.tr{top:6px;right:6px;border-left:0;border-bottom:0}
-.cam .bk.bl{bottom:6px;left:6px;border-right:0;border-top:0}
-.cam .bk.br{bottom:6px;right:6px;border-left:0;border-top:0}
-.cam.hot .bk{border-color:var(--alert)}
-.cam.st-checking .bk{border-color:var(--warn)}
-.cam.st-registered .bk{border-color:var(--ok)}
-.cam.st-alert .bk{border-color:var(--alert)}
+/* 미등록자 감지는 제일 급한 상황이라, 다른 상태보다 테두리를 굵게
+   해서(1px → 4px) 눈에 확 띄게 한다. box-sizing:border-box 라 두꺼워져도
+   카메라 월 그리드 크기는 안 흔들린다. */
+.cam.st-alert{border-color:var(--alert);border-width:4px}
+.cam.st-offline{border-color:var(--dimmer)}
+/* 2026-08-13: 상단 그라데이션 제거, 카메라 글자(CAM-A 등)/하단 IP 주소
+   표시 삭제 요청 — figcaption 엔 이제 상태 pill 배지만 남는다. 카메라
+   글자는 화면엔 안 보이지만 다른 패널(카메라별 인식 횟수 등)에서 계속
+   써서 figure 의 data-label 속성으로만 남겨뒀다(§ camLabel, script 참고). */
 .cam figcaption{position:absolute;top:0;left:0;right:0;
-  display:flex;align-items:center;gap:10px;padding:8px 10px;
-  background:linear-gradient(#000C,#000A 55%,transparent)}
-.cam .no{font-family:var(--mono);font-size:13.2px;letter-spacing:.12em;
-  color:var(--calm);font-variant-numeric:tabular-nums}
-.cam .nm{font-size:15.4px;font-weight:600;color:var(--text);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  display:flex;align-items:center;padding:8px 10px}
 .cam .pill{margin-left:auto;font-family:var(--mono);font-size:12.1px;
   letter-spacing:.1em;padding:3px 8px;border-radius:2px;white-space:nowrap;
   border:1px solid var(--rule-2);color:var(--dim);background:#000A}
@@ -164,16 +168,13 @@ button{font-family:inherit}
 .cam.st-checking .pill{border-color:var(--warn);background:var(--warn);color:#fff}
 .cam.st-registered .pill{border-color:var(--ok);background:var(--ok);color:#fff}
 .cam.st-alert .pill{border-color:var(--alert);background:var(--alert);color:#fff}
-.cam .src{position:absolute;left:10px;bottom:8px;font-family:var(--mono);
-  font-size:12.1px;color:var(--dimmer);background:#000A;padding:2px 6px;
-  border-radius:2px;max-width:70%;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap}
+.cam.st-offline .pill{border-color:var(--dimmer);background:var(--panel-3);color:var(--dim)}
 
 /* ── 카메라별 감지 횟수 ───────────────────────────────────────────── */
 /* "감지 인물" 목록이 비어 있어도(추적 중인 사람이 없어도) 카메라마다
    오늘 몇 번 인식했는지는 항상 보이게 — 명단과는 별개로 "대충 몇 명
    지나갔는지" 감이 오게 하는 용도. */
-.cam-counts{display:flex;flex-wrap:wrap;gap:6px 14px;padding:9px 14px;
+.cam-counts{display:flex;flex-direction:row;flex-wrap:wrap;gap:14px;padding:9px 14px;
   border-bottom:1px solid var(--rule);font-family:var(--mono);font-size:12.1px;
   color:var(--dim)}
 .cam-counts .item b{color:var(--text);font-weight:600;margin-right:5px}
@@ -210,35 +211,89 @@ button{font-family:inherit}
 .seen{font-family:var(--mono);font-size:12.1px;color:var(--dimmer);
   margin-left:auto;font-variant-numeric:tabular-nums}
 
-/* ── 이벤트 로그 ──────────────────────────────────────────────────── */
-.log{font-size:14.3px;max-height:30vh;overflow-y:auto}
-.log .e{display:flex;align-items:baseline;gap:10px;padding:8px 14px;
-  border-bottom:1px solid #ffffff08}
-.log .e:last-child{border-bottom:0}
-.log time{font-family:var(--mono);font-size:13.2px;color:var(--dimmer);
-  font-variant-numeric:tabular-nums;flex:0 0 auto}
-.log .who{color:var(--text);flex:1;min-width:0;overflow:hidden;
+/* ── 미등록자 감지 기록: 카메라 4대 고정 줄 ──────────────────────────
+   2026-08-12 전면 재구성(직접 그려준 와이어프레임 기준) — 예전 스크롤
+   로그 + 카메라 필터 캐러셀 방식을 버리고, A/B/C/D 4줄을 항상 고정으로
+   두고 줄마다 그 카메라의 감지 건을 </> 로 하나씩 넘겨보는 카드 방식으로
+   바꿨다. 확인/오류 체크로 건별 검토 처리, 처리된 건은 배지를 회색으로. */
+.det-list{display:flex;flex-direction:column}
+.det-row{display:flex;align-items:center;gap:10px;padding:10px 14px;
+  border-bottom:1px solid var(--rule)}
+.det-row:last-child{border-bottom:0}
+.det-thumb{flex:0 0 auto;width:36px;height:48px;object-fit:cover;border-radius:3px;
+  background:#000;border:1px solid var(--rule)}
+.det-thumb.is-empty{display:grid;place-items:center;font-family:var(--mono);
+  font-size:7px;color:var(--dimmer);text-align:center;line-height:1.2}
+.det-camlabel{flex:0 0 auto;width:30px;height:30px;display:grid;place-items:center;
+  border:1px solid var(--rule-2);border-radius:4px;font-family:var(--mono);
+  font-weight:700;font-size:15px;color:var(--text)}
+.det-nav{flex:0 0 auto;background:none;border:none;color:var(--dim);font-size:17px;
+  line-height:1;cursor:pointer;padding:2px 3px;transition:.14s}
+.det-nav:hover:not(:disabled){color:var(--text)}
+.det-nav:disabled{opacity:.2;cursor:default}
+.det-card{flex:1;min-width:0;text-align:center;font-family:var(--mono);
+  font-size:13.2px;font-weight:700;color:var(--calm);overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
-.log .cam{font-family:var(--mono);font-size:12.1px;color:var(--dim);
-  flex:0 0 auto}
-.log .kind{font-size:13.2px;padding:1px 7px;border-radius:2px;flex:0 0 auto;
-  border:1px solid var(--rule-2);color:var(--dim)}
-.log .kind.enter{border-color:var(--alert);color:var(--alert)}
-.log .kind.exit{border-color:var(--rule-2);color:var(--dimmer)}
-.log .kind.merge,.log .kind.split{border-color:var(--warn);color:var(--warn)}
+.det-card.is-empty{color:var(--dimmer);font-weight:400;font-style:italic}
+.det-card a{color:inherit;text-decoration:none}
+.det-card a:hover{text-decoration:underline}
+/* word-break:keep-all 없으면 "미등록자"가 좁은 칸에서 음절 단위로 잘려서
+   "미등록\n자" 처럼 쪼개진다 — 어절(공백) 단위로만 줄바꿈하게 강제. */
+.det-badge{flex:0 0 auto;text-align:center;font-size:10.5px;font-weight:700;
+  padding:4px 8px;border-radius:3px;border:1px solid var(--alert);color:var(--alert);
+  line-height:1.25;width:60px;word-break:keep-all;transition:.15s;
+  background:none;font-family:inherit;cursor:pointer}
+.det-badge:hover:not(:disabled){background:var(--alert);color:#000}
+.det-badge:disabled{opacity:.3;cursor:default}
+.det-badge.resolved{border-color:var(--rule-2);color:var(--dimmer)}
 
-/* ── 인원 통계 ───────────────────────────────────────────────────── */
+/* 헤더 "상세" 버튼 — 전체 기록 페이지(/detections/)로 이동 */
+.panel-more{flex:0 0 auto;width:auto;height:18px;padding:0 8px;
+  display:grid;place-items:center;border:1px solid var(--rule-2);border-radius:3px;
+  color:var(--dim);text-decoration:none;font-size:11px;transition:.14s}
+.panel-more:hover{color:var(--text);border-color:var(--calm)}
+
+/* ── 여정 통계 (신규/재방문/검토/미확정/총, 2026-08-11: Person.confirmed
+   기준 등록/미등록에서 Journey.final_review_result 기준으로 바꿈).
+   2026-08-12: 재방문+검토 합이 총과 안 맞아 보여서(신원 판정 아직 안
+   끝난 journey 가 "총"에만 포함되고 화면엔 안 보였음) "미확정" 칸을
+   추가해서 신규+재방문+검토+미확정 = 총 이 항상 맞게 보이게 함. */
 .stats{padding:10px 14px}
-.stats-row{display:grid;grid-template-columns:2.4fr 1fr 1fr 1fr;gap:6px;
+.stats-row{display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1fr 1fr;gap:6px;
   padding:7px 0;border-bottom:1px solid #ffffff08;font-size:14.3px}
 .stats-row:last-child{border-bottom:0}
 .stats-row span:not(:first-child){text-align:right}
 .stats-row.head{color:var(--dimmer);font-family:var(--mono);font-size:11px;
   letter-spacing:.1em;text-transform:uppercase}
 .stats-row:not(.head) span:first-child{color:var(--dim)}
-.stats-row:not(.head) span:nth-child(2){color:var(--ok)}
-.stats-row:not(.head) span:nth-child(3){color:var(--warn)}
-.stats-row:not(.head) span:nth-child(4){color:var(--text);font-weight:600}
+.stats-row:not(.head) span:nth-child(2){color:var(--calm)}
+.stats-row:not(.head) span:nth-child(3){color:var(--ok)}
+.stats-row:not(.head) span:nth-child(4){color:var(--warn)}
+.stats-row:not(.head) span:nth-child(5){color:var(--dimmer)}
+.stats-row:not(.head) span:nth-child(6){color:var(--text);font-weight:600}
+
+/* ── 최근 이동 카드(Journey 기준, 2026-08-11) ───────────────────────
+   canonical person_uid 만 최종 ID로 보여주고(temporary_person_uid 는
+   최종 노출 금지, B 지시사항). 2026-08-12: 이 패널은 신규/재방문만
+   보여주게 좁혀서(§api_state recent_journeys) 카드가 항상 확정된
+   person_uid 를 갖는다 — "검토 필요"는 이제 여기 안 뜨고 "보류 리스트"
+   패널로 옮겼다. Camera A 캡처 썸네일은 예전 인물 카드용이던 .card
+   img/.noimg 56×74px 슬롯을 재사용, 기본 .card 의 2열 그리드(이미지
+   56px + 내용)를 그대로 쓴다 — 내용 쪽은 .jr-body 로 한 번 더 감싸서
+   세로로 쌓는다. */
+.jr-body{display:flex;flex-direction:column;gap:5px;min-width:0}
+.jr-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.jr-pid{font-family:var(--mono);font-size:17.6px;font-weight:700;color:var(--text);
+  text-decoration:none}
+a.jr-pid:hover{color:var(--calm);text-decoration:underline}
+a.jr-thumblink{display:block;line-height:0}
+.jr-route{font-family:var(--mono);font-size:13.2px;color:var(--dim);letter-spacing:.03em}
+.jr-elapsed{font-family:var(--mono);font-size:12.1px;color:var(--dimmer)}
+.badge{display:inline-block;padding:2px 9px;border-radius:3px;font-family:var(--mono);
+  font-size:11px;letter-spacing:.04em;font-weight:600;white-space:nowrap}
+.badge.NEW{background:#1c3f4a;color:var(--calm)}
+.badge.REVISIT{background:#264d33;color:var(--ok)}
+.badge.MANUAL_REVIEW_REQUIRED{background:#4a3312;color:var(--warn)}
 
 .empty{padding:24px 16px;color:var(--dimmer);font-size:15.4px}
 ::-webkit-scrollbar{width:9px;height:9px}
@@ -246,6 +301,94 @@ button{font-family:inherit}
 ::-webkit-scrollbar-thumb{background:var(--rule-2);border-radius:5px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;
   transition:none!important}}
+
+/* ── "오류" 처리 후보 선택 모달 ─────────────────────────────────────
+   임베딩 자동매칭이 없어서(Snapshot.embedding 전부 빈 값, 2026-08-12
+   확인) 관리자가 사진 보고 직접 고르는 방식 — 최근 방문자 순으로 기본
+   후보를 보여주고, 검색으로 좁히거나 없으면 직접 person_uid 입력. */
+.review-modal{position:fixed;inset:0;z-index:100;display:flex;
+  align-items:center;justify-content:center}
+/* [hidden] 은 브라우저 기본 display:none 인데, 위 .review-modal{display:flex}
+   가 같은 우선순위라 그걸 덮어써서 hidden 속성을 무시하고 항상 떠 있던
+   버그(2026-08-12 실제 발생) — 속성 선택자를 더 구체적으로 걸어서 고침. */
+.review-modal[hidden]{display:none}
+.review-modal-backdrop{position:absolute;inset:0;background:#000a}
+.review-modal-box{position:relative;width:min(420px,92vw);max-height:80vh;
+  display:flex;flex-direction:column;background:var(--panel);
+  border:1px solid var(--rule);border-radius:6px;box-shadow:0 20px 50px #000a;
+  overflow:hidden}
+.review-modal-head{display:flex;align-items:center;justify-content:space-between;
+  padding:12px 14px;border-bottom:1px solid var(--rule);font-size:14px;font-weight:600}
+.review-modal-head button{background:none;border:none;color:var(--dim);
+  font-size:16px;cursor:pointer;line-height:1}
+.review-modal-head button:hover{color:var(--text)}
+.review-modal-search{margin:10px 14px 0;padding:8px 10px;background:var(--panel-3);
+  border:1px solid var(--rule-2);border-radius:3px;color:var(--text);font-size:13.5px}
+.review-modal-list{flex:1;overflow-y:auto;padding:10px 14px;min-height:120px;
+  display:flex;flex-direction:column;gap:6px}
+.review-cand{display:flex;align-items:center;gap:10px;padding:6px 8px;
+  border-radius:4px;cursor:pointer;border:1px solid transparent;background:var(--panel-2)}
+.review-cand:hover{border-color:var(--calm)}
+.review-cand img,.review-cand-noimg{width:36px;height:48px;object-fit:cover;
+  border-radius:3px;background:#000;border:1px solid var(--rule);flex:0 0 auto}
+.review-cand-noimg{display:grid;place-items:center;font-family:var(--mono);
+  font-size:7px;color:var(--dimmer)}
+.review-cand-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+.review-cand-id{font-family:var(--mono);font-weight:700;font-size:13.5px;color:var(--text)}
+.review-cand-meta{font-family:var(--mono);font-size:11px;color:var(--dimmer)}
+.review-modal-manual{display:flex;align-items:center;gap:8px;padding:12px 14px;
+  border-top:1px solid var(--rule);flex-wrap:wrap;font-size:12px;color:var(--dim)}
+.review-modal-manual input{flex:1;min-width:100px;background:#000;
+  border:1px solid var(--calm);color:var(--text);padding:6px 8px;border-radius:3px;
+  font-family:var(--mono);font-size:12.5px}
+.review-modal-manual button{flex:0 0 auto;font-size:12.5px;padding:6px 12px;
+  border-radius:3px;cursor:pointer;border:1px solid var(--rule-2);
+  background:var(--panel-3);color:var(--dim);transition:.14s}
+.review-modal-manual button:hover{color:var(--text);border-color:var(--calm)}
+
+/* ── "데이터 선택" 모달 — review-modal 뼈대를 그대로 쓰고, 위쪽에 이번
+   감지 사진 + Main 이 의심한 후보(최대 3개)를 얹는다. 후보는 클릭하면
+   "선택"만 되고(Success 스타일로 바뀜), 확인 버튼을 눌러야 실제로
+   반영된다 — AI(Main Re-ID)가 후보를 미리 하나 선택해두지만 관리자가
+   확인하기 전까진 보류 상태다. */
+.confusion-self{display:flex;align-items:center;gap:10px;padding:12px 14px 0}
+.confusion-self-thumb-wrap img,.confusion-self-thumb-wrap .noimg{width:44px;height:58px;
+  object-fit:cover;border-radius:3px;background:#000;border:1px solid var(--calm)}
+.confusion-self-thumb-wrap .noimg{display:grid;place-items:center;font-family:var(--mono);
+  font-size:7px;color:var(--dimmer)}
+.confusion-self-info{display:flex;flex-direction:column;gap:2px}
+.confusion-self-label{font-size:12.5px;font-weight:600;color:var(--text)}
+.confusion-self-time{font-family:var(--mono);font-size:11px;color:var(--dimmer)}
+.confusion-candidates{display:flex;flex-direction:column;gap:6px;padding:10px 0 0}
+.confusion-cand{display:flex;align-items:center;gap:10px;padding:7px 9px;
+  border-radius:4px;cursor:pointer;border:1px solid var(--rule-2);
+  background:var(--panel-3);text-align:left;font:inherit;transition:.14s;
+  margin:0 14px;width:calc(100% - 28px)}
+.confusion-cand:hover{border-color:var(--dim)}
+.confusion-cand.selected{border-color:var(--ok);background:#1b3a1e}
+.confusion-cand.selected:hover{border-color:var(--ok)}
+.confusion-cand img,.confusion-cand-noimg{width:36px;height:48px;object-fit:cover;
+  border-radius:3px;background:#000;border:1px solid var(--rule);flex:0 0 auto}
+.confusion-cand-noimg{display:grid;place-items:center;font-family:var(--mono);
+  font-size:7px;color:var(--dimmer)}
+.confusion-cand-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+.confusion-cand-tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
+  color:var(--dimmer);text-transform:uppercase}
+.confusion-cand.selected .confusion-cand-tag{color:#8fe28f}
+.confusion-cand-id{font-family:var(--mono);font-weight:700;font-size:13.5px;color:var(--dim)}
+.confusion-cand.selected .confusion-cand-id{color:var(--ok);font-weight:800}
+.confusion-confirm-only{margin-top:10px}
+.confusion-actions{display:flex;gap:8px;padding:14px;border-top:1px solid var(--rule)}
+.confusion-btn{flex:1;padding:9px 10px;border-radius:4px;font-size:13.5px;font-weight:600;
+  cursor:pointer;transition:.14s}
+.confusion-btn-cancel{border:1px solid var(--rule-2);background:var(--panel-3);color:var(--dim)}
+.confusion-btn-cancel:hover{color:var(--text);border-color:var(--alert)}
+.confusion-btn-ok{border:1px solid var(--ok);background:var(--ok);color:#0c1f0c}
+.confusion-btn-ok:hover:not(:disabled){filter:brightness(1.1)}
+.confusion-btn-ok:disabled{opacity:.35;cursor:default;background:var(--panel-3);
+  border-color:var(--rule-2);color:var(--dimmer)}
+.review-cand.selected{border-color:var(--ok);background:#1b3a1e}
+
 </style>
 </head>
 <body>
@@ -255,10 +398,10 @@ button{font-family:inherit}
 
 <!-- ── 상단 바 ─────────────────────────────────────────────────────── -->
 <div class="bar">
-  <div class="brand"><span class="rec off" id="rec"></span>열정강혁</div>
+  <div class="brand"><a href="{% url 'dashboard' %}" title="새로고침"><img class="brand-logo"
+    src="{% static 'tracking/logo_ver2.png' %}" alt="WOODIGANI"></a></div>
   <div class="sep"></div>
   <div class="metric">FPS<b id="m-fps">—</b></div>
-  <div class="metric">현재 화면<b id="m-now" class="hot">0</b></div>
   <div class="metric">누적 인물<b id="m-total">0</b></div>
   <div class="metric">카메라<b id="m-cams">{{ cameras|length }}</b></div>
   <div class="metric">감지 상태<span class="detect-pill" id="detect-pill">대기중</span></div>
@@ -287,11 +430,16 @@ button{font-family:inherit}
         <button class="btn settings-test" id="snd-test-warn" type="button">미등록 경고음 테스트 · B·C·D</button>
       </div>
       <a class="settings-row link" href="/admin/tracking/person/">인물 관리 →</a>
+      <a class="settings-row link" href="{% url 'persons_index' %}">전체 데이터 조회 →</a>
+      <a class="settings-row link" href="{% url 'journeys' %}">이동 목록 →</a>
       <div class="settings-row">
         <span>중앙 DB 연동</span>
         <span class="settings-val" id="central-status-val">확인 중…</span>
       </div>
       <a class="settings-row link" href="/admin/tracking/camera/">카메라 IP 설정 →</a>
+      {% if user.is_superuser %}
+      <a class="settings-row link" href="{% url 'db_admin' %}">DB 관리 →</a>
+      {% endif %}
     </div>
   </div>
   <div class="clock num" id="wall-clock">--:--:--</div>
@@ -300,25 +448,19 @@ button{font-family:inherit}
 <!-- ── 본문 ────────────────────────────────────────────────────────── -->
 <div class="grid">
   <section class="panel">
-    <h2>카메라 감시 <span id="h-cams">{{ cameras|length }}대</span></h2>
     {% if cameras %}
     <div class="wall" data-n="{{ cameras|length }}">
       {% for c in cameras %}
       {% with L="ABCDEFGHIJKLMNOP"|slice:forloop.counter|slice:"-1:" %}
-      <figure class="cam" data-cam="{{ c.index }}">
+      <figure class="cam" data-cam="{{ c.index }}" data-label="{{ L }}">
         {% if c.is_jetson and not c.url %}
         <div class="noimg">대기 중</div>
         {% else %}
         <img data-stream="{% if c.is_jetson %}{{ c.url }}{% else %}{% url 'mjpeg' c.index %}{% endif %}" alt="CAM - {{ L }} 실시간 화면">
         {% endif %}
-        <span class="bk tl"></span><span class="bk tr"></span>
-        <span class="bk bl"></span><span class="bk br"></span>
         <figcaption>
-          <span class="no">CAM - {{ L }}</span>
-          {% if c.name|lower|slice:":3" != "cam" %}<span class="nm">{{ c.name }}</span>{% endif %}
-          <span class="pill" data-pill="{{ c.index }}">정상</span>
+          <span class="pill" data-pill="{{ c.index }}">{% if c.is_jetson and not c.url %}미가동{% else %}정상{% endif %}</span>
         </figcaption>
-        <span class="src">{{ c.source }}</span>
       </figure>
       {% endwith %}
       {% endfor %}
@@ -330,44 +472,461 @@ button{font-family:inherit}
   </section>
 
   <div class="rail">
-    <section class="panel">
-      <h2>감지 인물 <span id="h-people">0</span></h2>
-      <div class="cam-counts" id="cam-counts"></div>
-      <div class="roster" id="roster">
-        <p class="empty">추적된 인물이 없다.</p>
+    <section class="panel" data-collapsible="people">
+      <h2 tabindex="0" role="button" aria-expanded="true">
+        <span>감지 리스트 <span id="h-people">0</span></span>
+        <span class="h2-right">
+          <a class="panel-more" href="{% url 'journeys' %}" title="전체 이동 목록 보기"
+             onclick="event.stopPropagation()">상세</a>
+          <span class="chev">▾</span>
+        </span>
+      </h2>
+      <div class="panel-body">
+        <div class="cam-counts" id="cam-counts"></div>
+        <div class="roster" id="roster">
+          <p class="empty">최근 이동 기록이 없다.</p>
+        </div>
       </div>
     </section>
 
-    <section class="panel">
-      <h2>이벤트 기록</h2>
-      <div class="log" id="log"><p class="empty">아직 기록이 없다.</p></div>
-    </section>
-
-    <section class="panel">
-      <h2>인원 통계</h2>
-      <div class="stats" id="stats">
-        <div class="stats-row head"><span>기간</span><span>등록</span><span>미등록</span><span>총</span></div>
-        <div class="stats-row"><span>7일</span><span id="st-week-r" class="num">—</span><span id="st-week-u" class="num">—</span><span id="st-week-t" class="num">—</span></div>
-        <div class="stats-row"><span>14일</span><span id="st-2w-r" class="num">—</span><span id="st-2w-u" class="num">—</span><span id="st-2w-t" class="num">—</span></div>
-        <div class="stats-row"><span>30일</span><span id="st-month-r" class="num">—</span><span id="st-month-u" class="num">—</span><span id="st-month-t" class="num">—</span></div>
+    <section class="panel" data-collapsible="events">
+      <h2 tabindex="0" role="button" aria-expanded="true">
+        <span>보류 리스트</span>
+        <span class="h2-right">
+          <a class="panel-more" href="{% url 'detections' %}" title="전체 기록 보기"
+             onclick="event.stopPropagation()">상세</a>
+          <span class="chev">▾</span>
+        </span>
+      </h2>
+      <div class="panel-body">
+        <div class="det-list" id="det-list">
+          {% for c in cameras %}
+          {% with L="ABCDEFGHIJKLMNOP"|slice:forloop.counter|slice:"-1:" %}
+          <div class="det-row" data-cam="{{ c.index }}">
+            <div class="det-thumb is-empty">NO IMG</div>
+            <span class="det-camlabel">{{ L }}</span>
+            <button class="det-nav det-prev" type="button" aria-label="이전(과거) 감지">‹</button>
+            <div class="det-card is-empty">—</div>
+            <button class="det-nav det-next" type="button" aria-label="다음(최신) 감지">›</button>
+            <button type="button" class="det-badge" title="누구와 헷갈리는지 보기">미등록자 감지</button>
+          </div>
+          {% endwith %}
+          {% endfor %}
+        </div>
       </div>
     </section>
+
+    <section class="panel" data-collapsible="stats">
+      <h2 tabindex="0" role="button" aria-expanded="true"><span>여정 통계</span><span class="chev">▾</span></h2>
+      <div class="panel-body">
+        <div class="stats" id="stats">
+          <div class="stats-row head"><span>기간</span><span>신규</span><span>재방문</span><span>검토</span><span>미확정</span><span>총</span></div>
+          <div class="stats-row"><span>1일</span><span id="st-d1-new" class="num">—</span><span id="st-d1-revisit" class="num">—</span><span id="st-d1-review" class="num">—</span><span id="st-d1-pending" class="num">—</span><span id="st-d1-total" class="num">—</span></div>
+          <div class="stats-row"><span>3일</span><span id="st-d3-new" class="num">—</span><span id="st-d3-revisit" class="num">—</span><span id="st-d3-review" class="num">—</span><span id="st-d3-pending" class="num">—</span><span id="st-d3-total" class="num">—</span></div>
+          <div class="stats-row"><span>5일</span><span id="st-d5-new" class="num">—</span><span id="st-d5-revisit" class="num">—</span><span id="st-d5-review" class="num">—</span><span id="st-d5-pending" class="num">—</span><span id="st-d5-total" class="num">—</span></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- "오류" 처리 시 실제 인물을 찾는 모달 — 임베딩 자동매칭이 없어서
+     사진 보고 직접 고르는 방식(2026-08-12 요청). 후보에 없으면 아래
+     칸에 person_uid 직접 입력. -->
+<div class="review-modal" id="review-modal" hidden>
+  <div class="review-modal-backdrop"></div>
+  <div class="review-modal-box">
+    <div class="review-modal-head">
+      <span>실제 인물 선택</span>
+      <button type="button" class="review-modal-close" aria-label="닫기">✕</button>
+    </div>
+    <input type="text" class="review-modal-search" placeholder="person_uid 또는 이름 검색…">
+    <div class="review-modal-list"></div>
+    <div class="review-modal-manual">
+      <span>목록에 없으면 직접 입력:</span>
+      <input type="text" class="review-modal-manual-input" placeholder="예: P000006">
+      <button type="button" class="review-modal-manual-go">연결</button>
+    </div>
+  </div>
+</div>
+
+<!-- "미등록자 감지" 배지 → 버튼(2026-08-13 재복원): 이 감지가 누구/어떤
+     데이터와 헷갈리는지 사진으로 비교해서 보여주는 모달. 메인 서버가
+     스스로 의심한 후보(candidates)가 있으면 위에 먼저 보여주고, 그 아래
+     일반 검색 목록(review-modal 과 동일한 사진 후보)에서 직접 골라도
+     된다 — 특정 인물을 못 찾겠으면 "미등록자 맞음(확인)"으로 끝낼 수도 있다. -->
+<div class="review-modal confusion-modal" id="confusion-modal" hidden>
+  <div class="review-modal-backdrop"></div>
+  <div class="review-modal-box">
+    <div class="review-modal-head">
+      <span>데이터 선택</span>
+      <button type="button" class="confusion-modal-close" aria-label="닫기">✕</button>
+    </div>
+    <div class="confusion-self">
+      <div class="confusion-self-thumb-wrap" id="confusion-self-thumb"></div>
+      <div class="confusion-self-info">
+        <span class="confusion-self-label">이번 감지 사진</span>
+        <span class="confusion-self-time" id="confusion-self-time"></span>
+      </div>
+    </div>
+    <div class="confusion-candidates" id="confusion-candidates"></div>
+    <button type="button" class="confusion-cand confusion-confirm-only" id="confusion-confirm-only-btn">
+      <div class="confusion-cand-noimg">NO IMG</div>
+      <div class="confusion-cand-info">
+        <span class="confusion-cand-tag">특정 인물 없음</span>
+        <span class="confusion-cand-id">미등록자 맞음(확인만 하기)</span>
+      </div>
+    </button>
+    <input type="text" class="review-modal-search confusion-search" placeholder="다른 인물 검색…">
+    <div class="review-modal-list confusion-list"></div>
+    <div class="review-modal-manual">
+      <span>목록에 없으면 직접 입력:</span>
+      <input type="text" class="review-modal-manual-input confusion-manual-input" placeholder="예: P000006">
+      <button type="button" class="confusion-manual-go">선택</button>
+    </div>
+    <div class="confusion-actions">
+      <button type="button" class="confusion-btn confusion-btn-cancel" id="confusion-cancel-btn">취소</button>
+      <button type="button" class="confusion-btn confusion-btn-ok" id="confusion-ok-btn" disabled>확인</button>
+    </div>
   </div>
 </div>
 
 <script>
 const CSRF = document.querySelector('[name=csrfmiddlewaretoken]').value;
 const CAM_MAP = JSON.parse(document.getElementById('cam-map-data').textContent);
-const seenCams  = new Map();     // 카메라가 늘어난 카드에만 플래시
-const camLabel  = {};            // index → A/B/C/D — 카메라 월 캡션(.no)에서 그대로 읽는다
+const seenJourneys = new Set();  // 이미 카드로 그린 journey_id — 새로 나타난 것만 플래시
+const camLabel  = {};            // index → A/B/C/D — 카메라 월 figure 의 data-label 에서 읽는다
+// 2026-08-13: 화면에 "CAM - A" 글자를 안 보여주기로 하면서, 대신 figure
+// 태그에 data-label 로 글자만 심어뒀다(§dashboard 템플릿) — 화면엔 안
+// 보여도 카메라별 인식 횟수 같은 다른 패널에서 A/B/C/D 표기가 계속 필요하다.
 document.querySelectorAll('.cam[data-cam]').forEach(fig=>{
-  const idx = fig.dataset.cam;
-  const noText = (fig.querySelector('.no') && fig.querySelector('.no').textContent || '').trim();
-  camLabel[idx] = noText.split('-').pop().trim() || '?';
+  camLabel[fig.dataset.cam] = fig.dataset.label || '?';
 });
 
 function esc(s){return String(s).replace(/[&<>"]/g,
   c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* ── 미등록자 감지 기록: 카메라 4대 고정 줄 ────────────────────────
+   줄마다(A/B/C/D) 그 카메라의 감지 건을 하나씩 </> 로 넘겨본다. 새
+   데이터가 폴링으로 들어와도 "지금 보고 있는 특정 건"이 안 바뀌게
+   인덱스가 아니라 event id 로 위치를 기억한다(안 그러면 새 감지가
+   찍힐 때마다 보고 있던 화면이 다른 사람으로 튄다). */
+let lastCamDetections = {};      // {camIdx: [detection, ...]} — 최신순
+const detCurrentId = {};         // camIdx → 지금 보고 있는 detection id
+
+/* item.kind 로 실제 엔드포인트를 가른다 — "보류 리스트"가 Event(카메라별
+   확정 인물의 미확인 감지) 와 Journey(헷갈리는/MANUAL_REVIEW_REQUIRED 여정)
+   를 한 카드 모양으로 같이 보여주게 되면서(2026-08-12), 검토 처리도
+   item 종류에 맞는 API로 나눠 보내야 한다. */
+async function reviewItem(item, status, personUid, aiSuggestedUid){
+  const body = new URLSearchParams({status,
+    ...(personUid ? {person_uid: personUid} : {}),
+    ...(aiSuggestedUid ? {ai_suggested_uid: aiSuggestedUid} : {})});
+  const url = item.kind === 'journey'
+    ? `/api/journeys/${encodeURIComponent(item.journey_id)}/review/`
+    : `/api/detections/${item.id}/review/`;
+  const res = await fetch(url, {method:'POST', body, headers:{'X-CSRFToken':CSRF}});
+  if(res.status === 302 || res.redirected){ location.href = '/admin/login/?next=/'; return {ok:false}; }
+  return res.json();
+}
+
+/* ── "오류" 후보 선택 모달 — Promise 로 열어서 고른 person_uid(또는
+   취소 시 null)를 돌려준다. 검색창을 비운 채로 열면 최근 방문자 순
+   기본 후보를 사진과 함께 보여준다("비슷한 데이터" 요청). */
+const reviewModal       = document.getElementById('review-modal');
+const reviewModalList   = reviewModal.querySelector('.review-modal-list');
+const reviewModalSearch = reviewModal.querySelector('.review-modal-search');
+const reviewModalManual = reviewModal.querySelector('.review-modal-manual-input');
+let reviewModalResolve  = null;
+
+function openReviewModal(){
+  reviewModal.hidden = false;
+  reviewModalSearch.value = '';
+  reviewModalManual.value = '';
+  loadReviewCandidates('');
+  reviewModalSearch.focus();
+  return new Promise(resolve => { reviewModalResolve = resolve; });
+}
+function closeReviewModal(result){
+  reviewModal.hidden = true;
+  if(reviewModalResolve){ reviewModalResolve(result); reviewModalResolve = null; }
+}
+async function loadReviewCandidates(q){
+  reviewModalList.innerHTML = '<p class="empty">불러오는 중…</p>';
+  let data;
+  try{ data = await (await fetch(`/api/persons/search/?q=${encodeURIComponent(q)}`)).json(); }
+  catch(e){ reviewModalList.innerHTML = '<p class="empty">불러오기 실패</p>'; return; }
+  if(!data.results.length){
+    reviewModalList.innerHTML = '<p class="empty">비슷한 인물이 없다 — 아래에서 직접 입력.</p>';
+    return;
+  }
+  reviewModalList.innerHTML = data.results.map(p => `
+    <div class="review-cand" data-uid="${esc(p.person_uid)}">
+      ${p.thumb_url ? `<img src="${esc(p.thumb_url)}" alt="" loading="lazy">`
+                    : '<div class="review-cand-noimg">NO IMG</div>'}
+      <div class="review-cand-info">
+        <span class="review-cand-id">${esc(p.person_uid)}</span>
+        <span class="review-cand-meta">${p.label ? esc(p.label)+' · ' : ''}방문 ${p.visit_count}회${p.confirmed ? ' · 등록됨' : ''}</span>
+      </div>
+    </div>`).join('');
+  reviewModalList.querySelectorAll('.review-cand').forEach(el => {
+    el.onclick = () => closeReviewModal(el.dataset.uid);
+  });
+}
+let reviewSearchTimer = null;
+reviewModalSearch.oninput = () => {
+  clearTimeout(reviewSearchTimer);
+  reviewSearchTimer = setTimeout(() => loadReviewCandidates(reviewModalSearch.value.trim()), 200);
+};
+reviewModal.querySelector('.review-modal-close').onclick = () => closeReviewModal(null);
+reviewModal.querySelector('.review-modal-backdrop').onclick = () => closeReviewModal(null);
+reviewModal.querySelector('.review-modal-manual-go').onclick = () => {
+  const v = reviewModalManual.value.trim();
+  closeReviewModal(v || null);
+};
+reviewModalManual.onkeydown = e => {
+  if(e.key === 'Enter') reviewModal.querySelector('.review-modal-manual-go').click();
+};
+
+/* ── "데이터 선택" 모달(2026-08-13 재복원) — "미등록자 감지" 배지를
+   눌렀을 때 연다. Main 이 스스로 의심한 후보(item.candidates, Journey
+   기반 항목에만 있음)를 "AI 추천"으로 보여주고 첫 번째를 기본 선택해
+   두지만, 클릭만으로는 아무것도 반영되지 않는다 — 후보/검색 결과를
+   클릭하면 "선택" 상태만 바뀌고(Success 스타일), 실제 반영은 아래 확인
+   버튼을 눌러야 일어난다. 취소를 누르거나 아무것도 선택 안 하면 확인
+   버튼이 막혀있다.
+   Promise 결과: {action:'match', person_uid} | {action:'confirm'} | null. */
+const confusionModal        = document.getElementById('confusion-modal');
+const confusionSelfThumb    = document.getElementById('confusion-self-thumb');
+const confusionSelfTime     = document.getElementById('confusion-self-time');
+const confusionCandidates   = document.getElementById('confusion-candidates');
+const confusionConfirmOnly  = document.getElementById('confusion-confirm-only-btn');
+const confusionOkBtn        = document.getElementById('confusion-ok-btn');
+const confusionCancelBtn    = document.getElementById('confusion-cancel-btn');
+const confusionList         = confusionModal.querySelector('.confusion-list');
+const confusionSearch       = confusionModal.querySelector('.confusion-search');
+const confusionManual       = confusionModal.querySelector('.confusion-manual-input');
+let confusionResolve = null;
+let confusionSelected = null;   // {type:'match', uid} | {type:'confirm'} | null
+
+function renderConfusionSelection(){
+  confusionCandidates.querySelectorAll('.confusion-cand').forEach(el => {
+    const isSel = !!(confusionSelected && confusionSelected.type === 'match'
+                     && confusionSelected.uid === el.dataset.uid);
+    el.classList.toggle('selected', isSel);
+    el.querySelector('.confusion-cand-id').textContent =
+      (isSel ? 'NEW : ' : 'candidate : ') + el.dataset.uid;
+  });
+  confusionConfirmOnly.classList.toggle('selected', !!(confusionSelected && confusionSelected.type === 'confirm'));
+  confusionList.querySelectorAll('.review-cand').forEach(el => {
+    el.classList.toggle('selected', !!(confusionSelected && confusionSelected.type === 'match'
+                                       && confusionSelected.uid === el.dataset.uid));
+  });
+  confusionOkBtn.disabled = !confusionSelected;
+}
+function selectConfusionCandidate(uid){
+  confusionSelected = {type: 'match', uid};
+  renderConfusionSelection();
+}
+function selectConfusionConfirmOnly(){
+  confusionSelected = {type: 'confirm'};
+  renderConfusionSelection();
+}
+
+function openConfusionModal(item){
+  confusionModal.hidden = false;
+  confusionSearch.value = '';
+  confusionManual.value = '';
+  confusionSelfThumb.innerHTML = item.thumb_url
+    ? `<img src="${esc(item.thumb_url)}" alt="" loading="lazy">`
+    : '<div class="noimg">NO IMG</div>';
+  confusionSelfTime.textContent = item.at || '';
+  const candidates = item.candidates || [];
+  confusionCandidates.innerHTML = candidates.map(c => `
+    <button type="button" class="confusion-cand" data-uid="${esc(c.person_uid)}">
+      ${c.thumb_url ? `<img src="${esc(c.thumb_url)}" alt="" loading="lazy">`
+                    : '<div class="confusion-cand-noimg">NO IMG</div>'}
+      <div class="confusion-cand-info">
+        <span class="confusion-cand-tag">메인 서버 추정 후보</span>
+        <span class="confusion-cand-id">candidate : ${esc(c.person_uid)}</span>
+      </div>
+    </button>`).join('');
+  confusionCandidates.querySelectorAll('.confusion-cand').forEach(el => {
+    el.onclick = () => selectConfusionCandidate(el.dataset.uid);
+  });
+  // AI(Main Re-ID)가 이미 계산해둔 최상위 후보를 기본 선택해둔다 — 관리자가
+  // 확인만 누르면 그대로 반영되지만, 아직 확정은 아니다("보류" 상태).
+  confusionSelected = candidates.length ? {type: 'match', uid: candidates[0].person_uid} : null;
+  renderConfusionSelection();
+  loadConfusionCandidates('');
+  confusionSearch.focus();
+  return new Promise(resolve => { confusionResolve = resolve; });
+}
+function closeConfusionModal(result){
+  confusionModal.hidden = true;
+  confusionSelected = null;
+  if(confusionResolve){ confusionResolve(result); confusionResolve = null; }
+}
+async function loadConfusionCandidates(q){
+  confusionList.innerHTML = '<p class="empty">불러오는 중…</p>';
+  let data;
+  try{ data = await (await fetch(`/api/persons/search/?q=${encodeURIComponent(q)}`)).json(); }
+  catch(e){ confusionList.innerHTML = '<p class="empty">불러오기 실패</p>'; return; }
+  if(!data.results.length){
+    confusionList.innerHTML = '<p class="empty">비슷한 인물이 없다 — 아래에서 직접 입력.</p>';
+    return;
+  }
+  confusionList.innerHTML = data.results.map(p => `
+    <div class="review-cand" data-uid="${esc(p.person_uid)}">
+      ${p.thumb_url ? `<img src="${esc(p.thumb_url)}" alt="" loading="lazy">`
+                    : '<div class="review-cand-noimg">NO IMG</div>'}
+      <div class="review-cand-info">
+        <span class="review-cand-id">${esc(p.person_uid)}</span>
+        <span class="review-cand-meta">${p.label ? esc(p.label)+' · ' : ''}방문 ${p.visit_count}회${p.confirmed ? ' · 등록됨' : ''}</span>
+      </div>
+    </div>`).join('');
+  confusionList.querySelectorAll('.review-cand').forEach(el => {
+    el.onclick = () => selectConfusionCandidate(el.dataset.uid);
+  });
+  renderConfusionSelection();
+}
+let confusionSearchTimer = null;
+confusionSearch.oninput = () => {
+  clearTimeout(confusionSearchTimer);
+  confusionSearchTimer = setTimeout(() => loadConfusionCandidates(confusionSearch.value.trim()), 200);
+};
+confusionModal.querySelector('.confusion-modal-close').onclick = () => closeConfusionModal(null);
+confusionModal.querySelector('.review-modal-backdrop').onclick = () => closeConfusionModal(null);
+confusionConfirmOnly.onclick = () => selectConfusionConfirmOnly();
+confusionModal.querySelector('.confusion-manual-go').onclick = () => {
+  const v = confusionManual.value.trim();
+  if(v) selectConfusionCandidate(v);
+};
+confusionManual.onkeydown = e => {
+  if(e.key === 'Enter') confusionModal.querySelector('.confusion-manual-go').click();
+};
+confusionCancelBtn.onclick = () => closeConfusionModal(null);
+confusionOkBtn.onclick = () => {
+  if(!confusionSelected) return;
+  closeConfusionModal(confusionSelected.type === 'match'
+    ? {action: 'match', person_uid: confusionSelected.uid}
+    : {action: 'confirm'});
+};
+
+function findCurrent(camIdx){
+  const list = lastCamDetections[camIdx] || [];
+  if(!list.length) return {list, idx: -1, d: null};
+  let idx = list.findIndex(x => x.id === detCurrentId[camIdx]);
+  if(idx < 0) idx = 0;                    // 처음 보거나(기본 최신) 그 건이 목록에서 빠짐
+  detCurrentId[camIdx] = list[idx].id;
+  return {list, idx, d: list[idx]};
+}
+
+/* "보류"(error) 처리된 건은 실시간 화면에서 바로 빼달라는 요청 — 서버도
+   다음 폴링부턴 cam_detections 에서 안 내려주지만, 그 전까지 1초 정도
+   그대로 남아있는 게 어색해서 로컬 목록에서도 즉시 지운다. 기록 자체는
+   지워지는 게 아니라 상세 페이지에서 계속 볼 수 있다. */
+function removeCurrentFromList(camIdx){
+  const list = lastCamDetections[camIdx] || [];
+  const idx = list.findIndex(x => x.id === detCurrentId[camIdx]);
+  if(idx >= 0) list.splice(idx, 1);
+  detCurrentId[camIdx] = list.length ? list[Math.min(idx, list.length - 1)].id : null;
+  renderDetRow(camIdx);
+}
+
+function renderDetRow(camIdx){
+  const row = document.querySelector(`.det-row[data-cam="${camIdx}"]`);
+  if(!row) return;
+  const {list, idx, d} = findCurrent(camIdx);
+  const thumb      = row.querySelector('.det-thumb');
+  const card       = row.querySelector('.det-card');
+  const badge      = row.querySelector('.det-badge');
+  const prevBtn    = row.querySelector('.det-prev');
+  const nextBtn    = row.querySelector('.det-next');
+
+  prevBtn.disabled = !d || idx >= list.length - 1;   // ‹ = 더 과거로
+  nextBtn.disabled = !d || idx <= 0;                 // › = 더 최근으로
+
+  if(!d){
+    thumb.outerHTML = '<div class="det-thumb is-empty">NO IMG</div>';
+    card.innerHTML = '—';
+    card.classList.add('is-empty');
+    card.title = '';
+    badge.classList.remove('resolved');
+    badge.disabled = true;
+    return;
+  }
+  // 어떤 사람인지 눈으로 보이게 — Camera A 캡처 썸네일(없으면 NO IMG)
+  thumb.outerHTML = d.thumb_url
+    ? `<img class="det-thumb" src="${esc(d.thumb_url)}" alt="" loading="lazy">`
+    : '<div class="det-thumb is-empty">NO IMG</div>';
+  card.classList.remove('is-empty');
+  // person_uid 가 있으면(external_id 확정된 인물) 아이디를 눌러서 상세
+  // 페이지로 바로 갈 수 있게 한다 — 없으면(아직 미확인 #N 뿐) 그냥 텍스트.
+  card.innerHTML = d.person_uid
+    ? `<a href="/persons/${encodeURIComponent(d.person_uid)}/">${esc(d.person)}</a>`
+    : esc(d.person);
+  card.title = d.at;
+  badge.classList.toggle('resolved', !!d.review_status);
+  badge.disabled = false;
+}
+
+function renderAllDetRows(){
+  document.querySelectorAll('.det-row').forEach(row => renderDetRow(row.dataset.cam));
+}
+
+document.querySelectorAll('.det-row').forEach(row => {
+  const camIdx = row.dataset.cam;
+  row.querySelector('.det-prev').onclick = () => {
+    const {list, idx} = findCurrent(camIdx);
+    if(idx >= 0 && idx < list.length - 1) detCurrentId[camIdx] = list[idx + 1].id;
+    renderDetRow(camIdx);
+  };
+  row.querySelector('.det-next').onclick = () => {
+    const {list, idx} = findCurrent(camIdx);
+    if(idx > 0) detCurrentId[camIdx] = list[idx - 1].id;
+    renderDetRow(camIdx);
+  };
+
+  // "미등록자 감지" 배지 — 누구/어떤 데이터와 헷갈리는지 사진으로
+  // 비교하는 "데이터 선택" 모달을 연다(2026-08-13 재복원).
+  row.querySelector('.det-badge').onclick = async () => {
+    const {d} = findCurrent(camIdx);
+    if(!d) return;
+    const result = await openConfusionModal(d);
+    if(!result) return;
+    // AI(Main)가 애초에 제안했던 후보 — 관리자 확정과 비교해서 서버가
+    // AiMatchFeedback 으로 로컬 수집한다(Main 전송은 아직 안 함).
+    const aiSuggested = (d.candidates && d.candidates[0]) ? d.candidates[0].person_uid : '';
+    if(result.action === 'confirm'){
+      const r = await reviewItem(d, 'confirmed', null, aiSuggested);
+      if(r.ok){ d.review_status = 'confirmed'; renderDetRow(camIdx); }
+      else alert(r.error || '처리 실패');
+    } else if(result.action === 'match'){
+      const r = await reviewItem(d, 'error', result.person_uid, aiSuggested);
+      if(r.ok) removeCurrentFromList(camIdx);
+      else alert(r.error || '연결 실패');
+    }
+  };
+});
+
+/* ── 패널 접기/펴기 ───────────────────────────────────────────────
+   rail 의 패널(감지 인물/이벤트 기록/여정 통계) 제목을 누르면 접힌다.
+   상태는 localStorage 에 저장해서 새로고침해도 유지된다. */
+document.querySelectorAll('.panel[data-collapsible]').forEach(panel => {
+  const key = 'panelCollapsed:' + panel.dataset.collapsible;
+  const h2 = panel.querySelector('h2');
+  const toggle = () => {
+    const collapsed = panel.classList.toggle('collapsed');
+    h2.setAttribute('aria-expanded', String(!collapsed));
+    localStorage.setItem(key, collapsed ? '1' : '0');
+  };
+  if(localStorage.getItem(key) === '1') toggle();
+  h2.addEventListener('click', toggle);
+  h2.addEventListener('keydown', ev => {
+    if(ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); toggle(); }
+  });
+});
 
 /* ── 설정 패널 / 알림음 ────────────────────────────────────────────
    알림음 on/off 를 상단 바 "설정" 드롭다운 안에서 켜고 끈다. 선택은
@@ -379,9 +938,9 @@ const settingsBtn   = document.getElementById('settings-btn');
 const settingsPanel = document.getElementById('settings-panel');
 
 // 감지 on/off — 상단 바의 독립 버튼. Jetson 장비 자체는 못 끄니, 우리 쪽
-// MQTT 수신을 끊는 걸로 흉내낸다. mqtt_worker.py 가 1초 안에 반영해서
-// 연결을 끊거나 다시 붙는다. 영상은 브라우저가 Jetson 에 직접 붙는
-// 거라 이 스위치와 무관하게 계속 나온다.
+// 메인 서버 API 폴링을 멈추는 걸로 흉내낸다. main_server_worker.py 가
+// 1초 안에 반영해서 폴링을 끊거나 다시 시작한다. 영상은 브라우저가
+// Jetson 에 직접 붙는 거라 이 스위치와 무관하게 계속 나온다.
 const detectToggleBtn = document.getElementById('detect-toggle-btn');
 
 function setDetectToggleBtn(enabled){
@@ -404,7 +963,13 @@ detectToggleBtn.onclick = async () => {
 };
 
 const sndToggle      = document.getElementById('snd-toggle');
-let soundOn   = localStorage.getItem('alarmSound') === '1';
+// 2026-08-13: 기본값을 꺼짐으로 뒀더니 "테스트" 버튼(마스터 스위치 무관하게
+// 항상 남)은 들리는데 실제 라이브 감지 때는 계속 조용해서 "사운드가 안
+// 울린다"로 보고됐다 — 경보음 마스터 스위치가 opt-in 으로 조용히 꺼져
+// 있는 건 감시 대시보드에 안 맞는 기본값이다. 이제 한 번도 안 만진
+// 사람은 켜짐이 기본이고, 사용자가 명시적으로 끈 경우('0' 저장)에만 꺼진
+// 채로 남는다.
+let soundOn   = localStorage.getItem('alarmSound') !== '0';
 let sndVolume = Number(localStorage.getItem('alarmVolume')) || 45;   // 0~100
 
 function refreshSndUI(){
@@ -450,11 +1015,11 @@ sndToggle.onchange = function(){
 refreshSndUI();
 
 /* ── 알림음 두 가지 ────────────────────────────────────────────────
-   둘 다 톤이 아니라 실제 음성으로 말해준다 — 화면을 안 보고 있어도
-   무슨 상황인지 바로 알 수 있게. 브라우저 내장 음성합성(Web Speech
-   API)이라 별도 음원 파일이 필요 없다. A 카메라에서 등록된 인물로
-   확인되면 "등록완료", B·C·D 에서 미등록자가 확인되면 "미등록자 감지"
-   를 한 번만 말한다. 동시에 여러 카메라에서 겹치면 브라우저가 알아서
+   둘 다 음성합성(Web Speech API)으로 말해준다 — 화면을 안 보고 있어도
+   무슨 상황인지 바로 알 수 있게. A 카메라에서 등록된 인물로 확인되면
+   "등록완료", B·C·D 에서 미등록자가 확인되면 "미등록자 감지"를 한 번만
+   말한다(2026-08-13: 한때 등록완료를 실제 음원 파일로 바꿨다가, 다시
+   말소리로 되돌림). 동시에 여러 카메라에서 겹치면 브라우저가 알아서
    순서대로 큐에 쌓아 이어 말한다(하나가 다른 걸 끊지 않는다).
    speakChime/speakWarning 은 소리 자체(설정 패널 "테스트" 버튼이 마스터
    스위치와 무관하게 항상 미리 들어볼 수 있게 쓴다) 이고, playChime/
@@ -500,18 +1065,33 @@ function clearCamTimers(camIdx){
   camTimers.set(camIdx, {});
 }
 
+// 스트림 자체가 안 열리는(카메라 꺼짐/네트워크 끊김) 카메라 — video img
+// 의 onerror/onload 로 채운다. 아래 addEventListener('load', ...) 참고.
+const streamOffline = new Set();   // camIdx(문자열) 중 스트림 로드 실패한 것
+
 // 카메라 한 대의 출력창(테두리·브래킷·pill)을 지금 상태에 맞게 그린다.
+// 우선순위: 확인중/등록/미등록(camState, 실제 감지 이벤트) > 스트림
+// 미설정("미가동") > 스트림 연결 끊김 > 평시(정상/감지 N). "정상" 은
+// 실제로 영상이 붙어 있을 때만 뜨게 한다 — 꺼진 카메라가 정상으로
+// 보이면 안 되니까.
 function applyCamVisual(camIdx, countN){
   const fig = document.querySelector(`.cam[data-cam="${camIdx}"]`);
   if(!fig) return;
   const pill = fig.querySelector('.pill');
   const state = camState.get(camIdx);
-  fig.classList.remove('st-checking', 'st-registered', 'st-alert');
+  const hasStream = !!fig.querySelector('[data-stream]');
+  const offline = streamOffline.has(camIdx);
+  fig.classList.remove('st-checking', 'st-registered', 'st-alert', 'st-offline');
   fig.classList.toggle('hot', !!countN && !state);
   if(state){
     fig.classList.add('st-' + state);
     if(pill) pill.textContent =
       state === 'checking' ? '확인중' : state === 'registered' ? '등록됨' : '미등록';
+  } else if(!hasStream){
+    if(pill) pill.textContent = '미가동';
+  } else if(offline){
+    fig.classList.add('st-offline');
+    if(pill) pill.textContent = '연결 끊김';
   } else if(pill){
     pill.textContent = countN ? `감지 ${countN}` : '정상';
   }
@@ -528,17 +1108,17 @@ function refreshTopNote(){
 
 // "감지 상태" 배지 — Jetson 장비 자체는 원격으로 켜고 끌 방법이 없이 항상
 // 자체적으로 감시 중이라("감시 시작/정지" 버튼을 지운 이유와 같다),
-// "감지중"의 의미를 "카메라 화면에 방금 뭔가 잡혔는지" 가 아니라 "MQTT 가
-// 연결돼서 실제로 감시가 되고 있는지" 로 잡았다. 설정에서 "감지 활성화"를
-// 끄면 우리 쪽에서 일부러 연결을 끊는 거라 "감지 꺼짐"(의도적)으로,
-// 켜져 있는데 연결만 끊긴 거면 "연결 끊김"(문제 상황)으로 구분해서
-// 보여준다. 카메라별 확인중/등록/미등록 색상과 소리는 이것과 별개로
-// camState 로 계속 처리한다.
-function refreshDetectPill(mqttConnected, detectionEnabled){
+// "감지중"의 의미를 "카메라 화면에 방금 뭔가 잡혔는지" 가 아니라 "메인
+// 서버 API 폴링이 연결돼서 실제로 감시가 되고 있는지" 로 잡았다. 설정에서
+// "감지 활성화"를 끄면 우리 쪽에서 일부러 폴링을 멈추는 거라 "감지
+// 꺼짐"(의도적)으로, 켜져 있는데 연결만 끊긴 거면 "연결 끊김"(문제
+// 상황)으로 구분해서 보여준다. 카메라별 확인중/등록/미등록 색상과
+// 소리는 이것과 별개로 camState 로 계속 처리한다.
+function refreshDetectPill(mainConnected, detectionEnabled){
   const el = document.getElementById('detect-pill');
-  const active = detectionEnabled !== false && mqttConnected;
+  const active = detectionEnabled !== false && mainConnected;
   el.textContent = detectionEnabled === false ? '감지 꺼짐'
-                  : mqttConnected ? '감지중' : '연결 끊김';
+                  : mainConnected ? '감지중' : '연결 끊김';
   el.classList.toggle('active', active);
 }
 
@@ -550,7 +1130,11 @@ function refreshDetectPill(mqttConnected, detectionEnabled){
 // 음성으로 "미등록자 감지" 한 번만 말한다(예전엔 반복해서 여러 번
 // 말했는데 시끄럽다는 피드백으로 1회로 줄였다). 그 외 조합(A 미등록,
 // B·C·D 등록)은 화면 색만 바뀌고 소리는 안 낸다.
-function startChecking(camIdx, confirmed){
+// 2026-08-13: "등록완료"는 mainResolved(메인 서버가 NEW/REVISIT 으로
+// 확정 식별) 기준으로 A 에서 매번 울린다 — confirmed(관리자 검수 여부)
+// 는 화면 색(등록됨/미등록 표시)에는 계속 쓰지만 차임 여부와는 별개다.
+// "미등록자 감지"는 그대로 confirmed 기준으로 B·C·D 에서 매번 운다.
+function startChecking(camIdx, confirmed, mainResolved){
   clearCamTimers(camIdx);
   camState.set(camIdx, 'checking');
   applyCamVisual(camIdx, prevCounts[camIdx]);
@@ -560,7 +1144,7 @@ function startChecking(camIdx, confirmed){
     applyCamVisual(camIdx, prevCounts[camIdx]);
     refreshTopNote();
     const L = camLabel[camIdx];
-    if(confirmed && L === 'A') playChime();       // 크게 한 번만 울린다
+    if(mainResolved && L === 'A') playChime();    // 크게 한 번만 울린다
     else if(!confirmed && (L === 'B' || L === 'C' || L === 'D')) playWarning();
     const hold = setTimeout(() => {
       camState.delete(camIdx);
@@ -586,46 +1170,63 @@ function renderCamCounts(counts){
   }).join('');
 }
 
-/* ── 인물 카드 ──────────────────────────────────────────────────── */
-function cardHTML(p){
-  const matched = p.cams.length > 1 ? ' matched' : '';
-  const badges = p.cams.map(c=>`<span class="cam-badge">${esc(c)}</span>`)
-                       .join('<span class="wire"></span>');
-  const img = p.thumb
-    ? `<img src="${p.thumb}" alt="인물 ${p.id} 크롭">`
+/* ── 최근 이동 카드(Journey 기준, 2026-08-11) ───────────────────────
+   메인 서버 identity 판정 결과를 그대로 보여준다. canonical person_uid
+   가 확정된 것만 "Person ID"로 보여준다.
+   2026-08-12: "감지 리스트에 고유 아이디가 떠야 하는데 검토 필요만
+   뜬다"는 지적 — 서버(api_state)가 이제 신규/재방문(NEW/REVISIT)만
+   내려주므로 여기 카드는 항상 확정된 person_uid 를 갖는다. 헷갈리는
+   (MANUAL_REVIEW_REQUIRED) 여정은 "보류 리스트" 패널로 옮겼다. */
+function journeyCardHTML(j){
+  // 2026-08-13: "전체 데이터 조회에 나오는 이미지랑 아이디가 감지리스트랑
+  // 연동되게" — person_uid 가 있으면 사진/ID 둘 다 그 인물의 "전체 데이터
+  // 조회" 상세(/persons/<uid>/)로 링크한다. 같은 person_uid 를 키로 쓰니
+  // 감지리스트에서 보이는 사진·ID 와 전체 데이터 조회 쪽 사진·ID 는
+  // 항상 같은 Main 레코드를 가리킨다(별도 매핑 테이블 없음).
+  const personHref = j.person_uid ? `/persons/${encodeURIComponent(j.person_uid)}/` : null;
+  const pidHTML = personHref
+    ? `<a class="jr-pid" href="${esc(personHref)}">${esc(j.person_uid)}</a>`
+    : `<span class="jr-pid">—</span>`;
+  const badgeHTML = j.final_review_result
+    ? `<span class="badge ${esc(j.final_review_result)}">${esc(j.final_review_result_label)}</span>`
+    : '';
+  const elapsed = j.journey_elapsed_seconds != null
+    ? Number(j.journey_elapsed_seconds).toFixed(1) + '초' : '—';
+  const isNew = !seenJourneys.has(j.journey_id);
+  seenJourneys.add(j.journey_id);
+  // Camera A 캡처(FACE rank1 우선, 없으면 BODY rank1) — 인증 프록시
+  // URL 이라 실제 Jetson 주소는 브라우저에 안 보인다.
+  const thumbInner = j.thumb_url
+    ? `<img src="${esc(j.thumb_url)}" alt="${esc(j.person_uid || '')} 캡처" loading="lazy">`
     : `<div class="noimg">NO IMG</div>`;
-  const grew = seenCams.get(p.id) !== undefined
-            && p.cams.length > seenCams.get(p.id);
-  seenCams.set(p.id, p.cams.length);
-  return `<article class="card${grew?' fresh':''}" data-id="${p.id}">
-    ${img}
-    <div>
-      <div class="pid">ID ${String(p.id).padStart(3,'0')}</div>
-      <div class="pname${p.named?'':' unnamed'}" data-edit="${p.id}"
-           title="눌러서 이름 입력">${esc(p.label)}</div>
+  const thumbHTML = personHref
+    ? `<a class="jr-thumblink" href="${esc(personHref)}" title="전체 데이터 조회에서 보기">${thumbInner}</a>`
+    : thumbInner;
+  return `<article class="card journey-card${isNew?' fresh':''}" data-jid="${esc(j.journey_id)}">
+    ${thumbHTML}
+    <div class="jr-body">
+      <div class="jr-top">${pidHTML}${badgeHTML}</div>
+      <div class="jr-route">${esc(j.route) || '—'}</div>
       <div class="row">
-        <div class="link${matched}">${badges || '<span class="cam-badge">—</span>'}</div>
-        <span class="seen">${esc(p.last_seen)}</span>
+        <span class="jr-elapsed">${elapsed}</span>
+        <span class="seen">${esc(j.entry_at) || '—'}</span>
       </div>
-    </div></article>`;
+    </div>
+  </article>`;
 }
-
-const KIND_CLASS = {'진입':'enter','이탈':'exit','병합':'merge','분리':'split'};
 
 /* ── 렌더 ───────────────────────────────────────────────────────── */
 function render(d){
-  document.getElementById('rec').className = 'rec' + (d.running?'':' off');
   document.getElementById('m-fps').textContent   = d.running ? d.fps : '—';
-  document.getElementById('m-now').textContent   = d.totals.now;
   document.getElementById('m-total').textContent = d.totals.people;
   document.getElementById('m-cams').textContent  = d.totals.cameras;
-  document.getElementById('h-people').textContent = d.gallery.length + '명';
+  document.getElementById('h-people').textContent = (d.recent_journeys || []).length;
   renderCamCounts(d.camera_counts);
-  refreshDetectPill(d.mqtt_connected, d.detection_enabled);
+  refreshDetectPill(d.main_connected, d.detection_enabled);
   setDetectToggleBtn(d.detection_enabled);
 
   // 카메라별 현재 인원 — live_tracks 를 카메라 인덱스로 묶는다 (로컬 파이프라인용,
-  // jetson MQTT 인원은 여기 안 잡히고 아래 진입 이벤트 쪽에서 처리한다)
+  // 메인 서버로 들어오는 인원은 여기 안 잡히고 아래 진입 이벤트 쪽에서 처리한다)
   const counts = {};
   (d.live_tracks || []).forEach(t=>{
     counts[t.cam] = (counts[t.cam] || 0) + 1;
@@ -647,30 +1248,24 @@ function render(d){
     seenEventKeys.add(key);
     if(initialized && e.kind === '진입'){
       const idx = CAM_MAP[e.cam];
-      if(idx !== undefined) startChecking(String(idx), !!e.confirmed);
+      if(idx !== undefined) startChecking(String(idx), !!e.confirmed, !!e.main_resolved);
     }
   });
   initialized = true;
 
   const r = document.getElementById('roster');
-  r.innerHTML = d.gallery.length
-    ? d.gallery.map(cardHTML).join('')
-    : '<p class="empty">추적된 인원이 없다.</p>';
+  r.innerHTML = (d.recent_journeys || []).length
+    ? d.recent_journeys.map(journeyCardHTML).join('')
+    : '<p class="empty">최근 이동 기록이 없다.</p>';
 
-  const l = document.getElementById('log');
-  l.innerHTML = (d.events || []).length
-    ? d.events.map(e=>`<div class="e"><time>${esc(e.at)}</time>
-        <span class="who">${esc(e.person)}</span>
-        <span class="cam">${esc(e.cam)}</span>
-        <span class="kind ${KIND_CLASS[e.kind]||''}">${esc(e.kind)}</span>
-      </div>`).join('')
-    : '<p class="empty">아직 기록이 없다.</p>';
+  // "미등록자 감지 기록" — 카메라 4대 고정 줄, 줄마다 </> 로 하나씩 넘겨본다.
+  lastCamDetections = d.cam_detections || {};
+  renderAllDetRows();
 }
 
 async function poll(){
   try{ render(await (await fetch('/api/state/')).json()); }
   catch(e){
-    document.getElementById('rec').className = 'rec off';
     refreshDetectPill(false);   // 대시보드 서버 자체가 응답 없으면 당연히 연결 끊김
   }
 }
@@ -678,9 +1273,16 @@ poll(); setInterval(poll, 1000);
 
 function renderStats(d){
   const set = (id, v) => { document.getElementById(id).textContent = v; };
-  set('st-week-r',  d.week.registered);   set('st-week-u',  d.week.unregistered);   set('st-week-t',  d.week.total);
-  set('st-2w-r',    d.two_weeks.registered); set('st-2w-u', d.two_weeks.unregistered); set('st-2w-t', d.two_weeks.total);
-  set('st-month-r', d.month.registered);  set('st-month-u', d.month.unregistered);  set('st-month-t', d.month.total);
+  const row = (prefix, s) => {
+    set(`st-${prefix}-new`,     s.new);
+    set(`st-${prefix}-revisit`, s.revisit);
+    set(`st-${prefix}-review`,  s.review);
+    set(`st-${prefix}-pending`, s.pending);
+    set(`st-${prefix}-total`,   s.total);
+  };
+  row('d1', d.d1);
+  row('d3', d.d3);
+  row('d5', d.d5);
 }
 async function pollStats(){
   try{ renderStats(await (await fetch('/api/stats/')).json()); }
@@ -707,8 +1309,20 @@ setInterval(()=>{
 }, 1000);
 
 // MJPEG 는 끝나지 않는 응답이라 load 이벤트를 막는다. 로드 완료 후에 붙인다.
-addEventListener('load', ()=>document.querySelectorAll('[data-stream]')
-  .forEach(i=>{i.src=i.dataset.stream;}));
+// img 자체의 onerror/onload 로 "이 카메라 스트림이 실제로 열렸는지" 를
+// 잡아서 pill 에 반영한다(꺼진 카메라가 "정상"으로 보이던 문제 수정).
+addEventListener('load', ()=>document.querySelectorAll('[data-stream]').forEach(img=>{
+  const camIdx = img.closest('.cam').dataset.cam;
+  img.onerror = () => {
+    streamOffline.add(camIdx);
+    applyCamVisual(camIdx, prevCounts[camIdx]);
+  };
+  img.onload = () => {
+    streamOffline.delete(camIdx);
+    applyCamVisual(camIdx, prevCounts[camIdx]);
+  };
+  img.src = img.dataset.stream;
+}));
 
 // 제어 버튼 (로컬 카메라 파이프라인용 — jetson 은 자체적으로 계속 돈다)
 document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=async()=>{

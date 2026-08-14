@@ -27,12 +27,17 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 INSTALLED_APPS = [
-    # tracking 이 admin 보다 먼저 와야 tracking/templates/admin/ 의
-    # 커스텀 템플릿(admin/base_site.html 등)이 admin 기본 템플릿보다
-    # 우선 선택된다 (Django 템플릿 조회는 INSTALLED_APPS 순서를 따름).
+    # 순서가 두 가지를 동시에 만족해야 한다:
+    # (1) auth 가 tracking 보다 먼저 와야 한다 — admin 자동 등록(autodiscover)이
+    #     INSTALLED_APPS 순서대로 각 앱의 admin.py 를 불러오는데, tracking/admin.py
+    #     가 auth 의 기본 User 등록을 unregister 하고 우리 프록시("사용자관리")로
+    #     바꿔치기하기 때문에, auth.admin 이 먼저 User 를 등록해놔야 한다.
+    # (2) tracking 이 admin 보다는 먼저 와야 한다 — tracking/templates/admin/ 의
+    #     커스텀 템플릿(admin/base_site.html, admin/login.html)이 admin 기본
+    #     템플릿보다 우선 선택되려면 그렇다 (Django 템플릿 조회도 이 순서를 따름).
+    "django.contrib.auth",
     "tracking",
     "django.contrib.admin",
-    "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
@@ -138,6 +143,18 @@ JETSON = {
 # 이 DB 는 절대 쓰지 않고 읽기만 한다 — 다른 프로세스(journey_sqlite_server.py)
 # 가 계속 쓰고 있는 파일이라 동시 쓰기는 손상 위험이 있다.
 CENTRAL_DB_PATH = os.environ.get("CENTRAL_DB_PATH", "")
+
+# ---------------------------------------------------------------- Main 관리자 API
+# Main(B)의 DB 관리자 API(admin/database/status·backup·reset/*·jobs) 전용 설정.
+# 기존 journeys/persons/captures 조회는 지금처럼 RuntimeConfig.main_server_host/
+# port(관리자가 Django admin에서 편집)를 그대로 쓴다 — 이건 그거랑 별개다.
+# MAIN_ADMIN_TOKEN 은 절대 프론트엔드로 안 나가야 해서 DB(RuntimeConfig)가
+# 아니라 여기 환경변수로만 관리한다: Django admin 화면에도 안 뜨고, 어떤
+# API 응답에도 안 실린다. 비어있으면(미설정) admin-proxy 쪽이 503
+# ADMIN_API_DISABLED 로 응답한다(§tracking/admin_db_proxy.py) — Main을
+# 아예 호출하지 않는다.
+MAIN_API_BASE_URL = os.environ.get("MAIN_API_BASE_URL", "http://10.10.20.33:8080")
+MAIN_ADMIN_TOKEN = os.environ.get("MAIN_ADMIN_TOKEN", "")
 
 TRACKER = {
     # tracker_worker 가 참고하는 기본값. Camera 모델이 우선한다.

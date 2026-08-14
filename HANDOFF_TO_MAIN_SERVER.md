@@ -1,245 +1,311 @@
-# reid-admin-web → 메인 서버(B) API 연동 요청
+# reid-admin-web ↔ 메인 서버(B) API 연동
 
-작성 시점: 2026-08-10. C(Django/웹) 담당자가 B(메인 서버) 담당자에게, 대시보드가
-API로 어떤 데이터를 받아야 하는지 정리해서 전달하는 문서. 8/6 작성했던 이전
-버전은 경로·프로토콜이 다 바뀌어서 이 문서로 대체한다.
+작성 시점: 2026-08-11. 8/10에 C가 B에게 요청한 내용에 B가 답변을 줘서
+구조가 확정됐다. 이 문서는 그 확정 내용 + C(Django) 쪽 구현 현황을
+반영해서 갱신한 버전이다.
 
----
-
-## 1. 지금 상태 (요약)
-
-- 대시보드 리포: `jetson-multicam-re_id-tracking` 의 `reid-admin-web` 브랜치
-  (`web/` 디렉토리). jetson 쪽 코드(`src/`, `configs/` 등)는 절대 안 건드림.
-- 지금은 Django가 **Jetson A보드(10.10.20.56)의 MQTT를 직접 구독**해서
-  자체 SQLite에 저장하는 임시 구성으로 돌아간다 (`mqtt_worker.py` +
-  `tracking/mqtt_ingest.py`, 토픽 `cctv/entry`, 필드 `global_person_id` 기준 —
-  **이건 구 프로토콜이고, B의 메인 서버 브랜치(`release/multinode-baseline`)를
-  보니 이미 다른 스키마로 바뀌어 있었다.** 아래 3번 참고.
-- 결론(8/6에 이미 정함, 유지): **central_tracking.db를 Django가 직접 열지
-  않는다.** SQLite는 네트워크 파일 공유가 없으면 원격 PC에서 못 열고, 연다 해도
-  `journey_sqlite_server.py`의 동시 쓰기와 부딪힐 위험이 있다. **B가 API를
-  열고 Django가 그걸 호출하는 방식**으로 간다.
+**2026-08-11 추가 갱신**: B가 "웹 연동 기준"을 다시 명확히 정리해서
+줬다 — 최종 Re-ID/Journey/NEW·REVISIT 판정은 전부 메인 서버가 처리하고,
+웹은 Jetson 로컬 트랙 ID가 아니라 `person_uid`/`journey_id` 기준으로만
+사람을 관리해야 한다는 것, 그리고 `temporary_person_uid`(Final Review
+확정 전 임시값)를 절대 최종 Person ID로 보여주면 안 되고 확정 후
+`canonical_person_uid`만 최종 ID로 써야 한다는 것. 이 내용을 반영해서
+Django 쪽에 `Journey` 모델 + "이동 목록"/"사람 상세" 조회 전용 화면을
+오늘 바로 구현했다 — §2-1, §4-2, §5 참고.
 
 ---
 
-## 2. 대시보드가 실제로 화면에서 쓰는 데이터 (기능별)
+## 1. 확정된 구조
 
-B가 API를 설계할 때 "이 화면 기능에 이 데이터가 필요하다"를 바로 알 수 있게
-기능 단위로 정리했다. (`web/tracking/templates/tracking/dashboard.html`,
-`web/tracking/views.py` 의 `api_state()` 기준)
+```
+Jetson A/B/C/D
+      │ MQTT
+      ▼
+메인 서버 (Windows, B 담당, 10.10.20.33)
+      │ main_server.db 에 적재
+      ▼
+REST API (B 가 오늘 구현, :8080)
+      │ GET, 인증 없음 (같은 교육장 LAN)
+      ▼
+Django 대시보드 (C 담당, 10.10.20.26)
+```
 
-| 화면 기능 | 필요한 데이터 |
-|---|---|
-| 카메라 월 A/B/C/D 영상 | (API 무관) 각 Jetson 보드가 직접 서빙하는 MJPEG URL — `Camera.jetson_host`/`jetson_port`로 Django admin에서 보드별로 이미 지정 가능하게 해둠 |
-| 카메라 테두리 색(확인중/등록됨/미등록) + 알림음 | 카메라별 **최근 진입 이벤트**와, 그 사람이 **등록(확인)된 인물인지 아닌지** 플래그 — 이게 제일 중요한 실시간 데이터 |
-| 상단 "CAM X 미등록 인물 감지" 문구 | 위와 동일한 이벤트에서 파생 |
-| "감지 상태" 배지(빨강/검정) | 메인 서버·MQTT 연결이 살아있는지 여부 (헬스체크성) |
-| 감지 인물 패널(카드 목록) | 인물별: id, 이름(있으면), 등록 여부, 대표 썸네일, **어느 카메라들에서 잡혔는지**, 마지막 감지 시각 |
-| 감지 인물 패널 상단 "카메라별 인식 횟수" | 카메라별로 오늘 몇 번 진입 이벤트가 있었는지 카운트 |
-| 이벤트 기록(로그) | 시각, 인물, 카메라, 종류(진입 등) — 최근 N건 |
-| 인원 통계(7일/14일/30일) | 기간별 등록/미등록/총 인원 수 |
-| **(신규 요청) journey_id-person_id 매칭 횟수** | 아래 4번 참고 — 아직 스키마 확인이 안 돼서 구체적인 필드를 못 정했다 |
+- Django 는 **더 이상 MQTT 를 전혀 구독하지 않는다.** Jetson 이든 중앙
+  브로커(10.10.20.33:1883)든 직접 안 붙는다 — 전부 메인 서버가 처리하고,
+  Django 는 메인 서버의 REST API 만 호출한다.
+- `central_tracking.db`(SQLite) 를 Django가 직접 여는 방식은 쓰지
+  않는다(8/6에 정한 것 유지) — SQLite 동시쓰기 문제, 네트워크 파일공유
+  필요 등의 이유.
+- 영상은 그대로: 브라우저가 각 Jetson 보드의 MJPEG URL 에 직접 접근
+  (`Camera.jetson_host`/`jetson_port`, Django admin 에서 카메라마다 지정).
+  API 나 메인 서버를 거치지 않는다.
 
-지금 `/api/state/` 가 실제로 내려주는 모양(로컬 구현 기준, 참고용):
+---
+
+## 2. 사람 식별자 — person_uid vs journey_id (확정)
+
+- **`person_uid`** = 사람 1명의 **영구 식별자** (예: `P000002`). 반복
+  방문해도 이 값은 안 바뀐다. Django 쪽에서 인물을 묶는 키는 **반드시
+  이걸 써야 한다** (`Person.external_id` 에 저장).
+- **`journey_id`** = 방문 **1회짜리 세션** (예: `J000002`, `J000004`,
+  `J000010` — 같은 `person_uid` 가 여러 개 가질 수 있음).
+- **`visit_count`**: 메인 서버가 관리하는 방문 횟수. `Person.visit_count`
+  로 그대로 받아 저장한다.
+- **Identity/Journey 의 source of truth 는 메인 서버다.** Camera A 는
+  스스로 신원을 정하지 않는다 — A 가 `request_id`+임베딩을 보내면,
+  메인 서버가 Re-ID/DB 조회 후 `person_uid`/`journey_id` 를 배정하고
+  A에게 `cctv/responses/a/entry` 로 돌려준다.
+- **알려진 버그(B 인지, 수정 예정)**: 지금 B(재식별) 로그에
+  `"global_person_id": "J000002"` 처럼 journey_id 가 들어가는 버그가
+  있음 — Django 는 이 필드를 신뢰하면 안 되고, `person_uid` 필드만
+  기준으로 써야 한다. B가 `global_person_id = person_uid` 로 고칠 예정.
+
+**"등록(확인)된 인물"인지 여부(`Person.confirmed`)는 메인 서버 데이터가
+아니라 이 대시보드에서만 관리하는 로컬 판단이다** — 새 `person_uid` 는
+항상 미등록(`confirmed=False`)으로 시작하고, 관리자가 Django admin 에서
+직접 확인 체크한다. 카메라 테두리 색(초록/빨강)·알림음은 이 로컬 값
+기준.
+
+---
+
+## 2-1. Final Identity Review — temporary vs canonical (B 확정, 2026-08-11)
+
+한 여정(journey)의 신원이 확정되기까지 메인 서버 내부에서 여러 단계의
+후보값을 거친다. **웹은 이 중 `canonical_person_uid` 만 "이 사람이
+누구다"라는 최종 결론으로 취급한다** — 나머지는 전부 참고/진행상황용:
+
+| 필드 | 의미 | 웹에서 최종 ID로 써도 되나 |
+|---|---|---|
+| `temporary_person_uid` | Re-ID 진행 중 임시로 붙는 값 | ❌ 안 됨 |
+| `candidate_person_uid` | 노드 하나가 제안한 후보 | ❌ 안 됨 |
+| `final_candidate_person_uid` | 여러 노드 종합한 최종 후보 | ❌ 안 됨 |
+| `canonical_person_uid` | Final Review 확정 결과 | ✅ 이것만 |
+
+`final_review_result` 는 셋 중 하나:
+- **`NEW`** — 신규 인물로 확정. `canonical_person_uid` 가 새 `person_uid`.
+- **`REVISIT`** — 기존 인물 재방문으로 확정. `canonical_person_uid` 가
+  기존 `person_uid`(예: 실제 사례에서 `temporary_person_uid=P000072` 로
+  들어왔다가 `canonical_person_uid=P000006` 으로 확정됨 — 이 경우 웹은
+  P000072 가 아니라 P000006 을 그 사람의 ID로 보여준다).
+- **`MANUAL_REVIEW_REQUIRED`** — 아직 확정 안 됨. `canonical_person_uid`
+  가 비어있다 — 이 상태인 동안 웹은 이 여정에 어떤 `Person` 도 연결하지
+  않고 "검토 필요" 목록에 별도로 보여주기만 한다(§5 참고, Django
+  `Journey.person` 이 계속 null).
+
+이 판단(신규/재방문/검토필요) 로직은 전부 메인 서버 담당이고, 웹은
+그 결과값만 그대로 표시한다 — Django 쪽에 별도 Re-ID 로직 없음.
+
+**Local Track ID 는 Person ID 가 아니다** (B 명시): 예를 들어
+`D_local_track_id=13` 과 `person_uid=P000006` 은 완전히 다른 값이고,
+Local Track ID 는 노드 하나의 카메라 안에서만 의미 있는 번호다. 웹의
+사람 식별 키는 **항상 `person_uid`(정확히는 확정된 경우
+`canonical_person_uid`)**.
+
+---
+
+## 3. MQTT 토픽 (메인 서버 내부용 — Django 는 이제 이걸 안 본다, 참고용)
+
+- `cctv/events/a/entry` — A 입장
+- `cctv/responses/a/entry` — 메인 서버 → A (person_uid/journey_id 배정 응답)
+- `cctv/events/b/passage` — B 재식별 통과
+- `cctv/candidates/b` — 메인 서버 → B (후보 전달)
+- `cctv/events/d/arrival` — D 도착
+- `cctv/candidates/d` — 메인 서버 → D (후보 전달)
+- `cctv/main/journey/completed` — 여정 완료
+
+B PASSAGE 실제 페이로드(참고, Django 가 직접 받진 않음):
 
 ```json
 {
-  "mqtt_connected": true,
-  "detection_enabled": true,
-  "jetson_entries_total": 0,
-  "totals": { "people": 0, "cameras": 4 },
-  "gallery": [
-    { "id": 1, "label": "", "named": false, "confirmed": false,
-      "thumb": null, "cams": ["Camera A · 입장"], "last_seen": "15:24:10" }
-  ],
-  "camera_counts": {
-    "900": { "name": "Camera A · 입장", "count": 3 }
-  },
-  "events": [
-    { "at": "15:24:10", "person": "미확인 #1", "confirmed": false,
-      "cam": "Camera A · 입장", "kind": "진입" }
-  ]
+  "schema_version": 1,
+  "event": "PASSAGE",
+  "journey_id": "J000002",
+  "person_uid": "P000002",
+  "current_node": "B",
+  "route": ["A", "B"],
+  "next_nodes": ["D"],
+  "entry_timestamp": "2026-08-10T15:42:45+09:00",
+  "b_passage_timestamp": "2026-08-10T15:42:50+09:00",
+  "b_local_track_id": 3,
+  "gallery_count": 3,
+  "gallery": "[512-d embeddings...]",
+  "similarity": 0.770680,
+  "verification_status": "AUTO_MATCHED"
+}
+```
+
+D ARRIVAL 실제 페이로드(정상, 참고용):
+
+```json
+{
+  "event": "ARRIVAL",
+  "journey_id": "J000002",
+  "person_uid": "P000002",
+  "global_person_id": "P000002",
+  "node_id": "D",
+  "current_node": "D",
+  "route": ["A", "B", "D"],
+  "entry_timestamp": "2026-08-10T15:42:45+09:00",
+  "passage_timestamp": "2026-08-10T15:42:50+09:00",
+  "d_arrival_timestamp": "2026-08-10T15:42:53+09:00",
+  "total_duration_seconds": 8.0,
+  "d_local_track_id": 2,
+  "best_similarity": 0.760702,
+  "combined_score": 0.757277
 }
 ```
 
 ---
 
-## 3. 새로 확인한 프로토콜 (release/multinode-baseline 브랜치 + B 확인)
+## 4. API 스펙 (B 확정) — Django 는 이 4개를 오늘 붙인다
 
-`git fetch` 로 이 브랜치를 봤을 때 우리가 지금 파싱하는 구 프로토콜과
-완전히 다른 걸 발견했고, **B에게 실제 A 진입(ENTRY) 페이로드를 받아서
-아래 내용을 확정**했다.
+Base URL: `http://10.10.20.33:8080` · GET 전용 · 인증 없음(교육장 LAN MVP,
+외부망 배포 시 추가 예정)
 
-- **브로커 주소**: `configs/mqtt.example.yaml` 기본값이 `10.10.20.33` (중앙
-  브로커). 실제로 그 IP의 1883 포트는 열려있는 것 확인함(연결은 됨, 다만
-  20초 구독해봐도 실시간 트래픽은 없었음 — 노드가 꺼져있거나 아무도 안
-  지나간 상태였을 뿐).
-- **토픽이 노드/단계별로 분리됨** (코드 기준, B 확인 필요):
-  - `cctv/events/a/entry` — A 입장
-  - `cctv/responses/a/entry` — A가 구독하는 응답 토픽 (중앙 서버가
-    `request_id`에 대응하는 식별자를 돌려주는 곳으로 추정)
-  - `cctv/events/b/passage` — B 재식별 통과
-  - `cctv/events/d/arrival` — D 도착
-  - `cctv/candidates/b`, `cctv/candidates/d` — 노드 간 후보 전달용으로 추정
-
-### A 진입(ENTRY) 페이로드 — B에게 실제로 받아서 확정함
-
+### `GET /api/status`
 ```json
-{
-    "request_id": "...",
-    "timestamp": "...",
-    "node_id": "A",
-    "event": "ENTRY",
-    "local_track_id": 15,
-    "next_nodes": ["B", "C"],
-
-    "reid_model": "osnet_x0_25",
-    "embedding_dim": 512,
-    "embedding": [ /* 512-d, 몸통 Re-ID */ ],
-    "quality": 0.91,
-    "capture_path": "...",
-
-    "face_available": true,
-    "face_detector_model": "yunet_2023mar",
-    "face_reid_model": "sface_2021dec",
-    "face_embedding_dim": "...",
-    "face_embeddings": [ [ /* ... */ ], [ /* ... */ ], [ /* ... */ ] ],
-    "face_qualities": ["..."],
-    "face_confidences": ["..."],
-    "face_frontal_scores": ["..."],
-    "face_sharpness": ["..."],
-    "face_capture_paths": ["..."]
-}
+{"server": "ok", "mqtt_connected": true, "last_event_at": "2026-08-11T09:30:21+09:00"}
 ```
-
-- 예상 못 했던 부분: **얼굴 인식 데이터가 통째로 붙어 있다** — 몸통
-  Re-ID(`embedding`) 하나만 오던 구 프로토콜과 다르게, 얼굴 임베딩을
-  여러 장(`face_embeddings`) 품질 지표(`face_qualities` 등)와 함께
-  같이 보낸다.
-- **여전히 `global_person_id`/`journey_id`/`person_uid` 가 없다** — A
-  혼자만으로는 신원이 없다는 게 다시 확인됐다. 즉 4번(journey_id-person_id
-  매칭)에 필요한 식별자는 이 이벤트가 아니라 **B(재식별)/D(도착) 페이로드나
-  중앙 서버 응답 쪽에서 나올 것** — 아직 그쪽 실제 페이로드는 못 받았다.
-
----
-
-## 4. 신규 요청: journey_id ↔ person_id 매칭 횟수
-
-지금 대시보드에 "이 사람이 실제로 몇 번 매칭됐는지"를 보여주고 싶다는
-요청이 있었다. 근데 예전에 확인했던 `central_tracking.db` 스키마
-(`feature/journey-sqlite-e2e` 브랜치의 `journey_repository.py`)에는
-`journeys` 테이블에 `journey_id`만 있고 **`person_id`/`person_uid` 컬럼이
-없었다** — 3번 항목에서 본 것처럼 `person_uid`는 최근 프로토콜(passage
-페이로드)에만 등장한다.
-
-**B에게 확인 요청**: 지금 실제로 쓰는 DB(또는 서버 내부 상태)에
-- `journey_id` 하나에 `person_uid`(또는 동등한 "등록된 사람" 식별자)가
-  몇 번 매칭됐는지 셀 수 있는 테이블/필드가 있는지
-- 있다면 그 테이블 이름과 컬럼 구성
-
-이게 확인되면 아래 API에 엔드포인트 하나 추가해서 받으면 된다.
-
----
-
-## 5. 제안하는 API 스펙 (개정판)
-
-전제: GET 전용, 사내망이라 인증 없음(필요하면 조정). 아래는 **대시보드가
-실제로 쓰는 화면 단위**로 다시 짠 제안이다 — B가 그대로 안 가도 되고,
-같이 조정하면 된다.
 
 ### `GET /api/persons`
-감지 인물 패널용. A/B/D 체크포인트를 이미 하나의 인물로 합쳐서 내려주면
-Django 쪽에서 다시 합칠 필요가 없다.
-
 ```json
 {
   "persons": [
     {
-      "person_id": "P000001",
-      "journey_ids": ["J000001", "J000045"],
-      "label": null,
-      "confirmed": true,
-      "first_seen": "2026-08-10T10:00:00+09:00",
-      "last_seen": "2026-08-10T10:03:12+09:00",
-      "checkpoints": ["A", "B"],
-      "match_count": 2,
-      "thumb_url": null
+      "person_uid": "P000002",
+      "visit_count": 2,
+      "first_seen": "2026-08-10T15:42:45+09:00",
+      "last_seen": "2026-08-10T15:43:33+09:00",
+      "status": "COMPLETED"
     }
   ]
 }
 ```
 
-- `person_id`: 등록된(반복 방문 가능한) 사람의 영구 식별자 — `journey_id`는
-  방문(여정) 1회 단위라 사람 단위 식별자와는 다를 걸로 추정. **B 쪽 실제
-  명칭 확인 필요.**
-- `confirmed`: 등록(허가)된 인물인지 — 지금 대시보드의 초록/빨강 판정 기준
-- `match_count`: 4번 항목의 "journey_id-person_id 매칭 횟수"
-
 ### `GET /api/events?since=<ISO timestamp>`
-이벤트 로그 + 카메라 테두리 색/알림음 트리거용. `since` 이후 것만 요청해서
-매번 전체를 안 받는다.
-
 ```json
 {
   "events": [
-    {"at": "2026-08-10T10:03:12+09:00", "node": "B", "kind": "passage",
-     "journey_id": "J000045", "person_id": "P000001", "confirmed": true}
+    {"at": "2026-08-10T15:42:50+09:00", "person_uid": "P000002",
+     "journey_id": "J000002", "node": "B", "kind": "PASSAGE"},
+    {"at": "2026-08-10T15:42:53+09:00", "person_uid": "P000002",
+     "journey_id": "J000002", "node": "D", "kind": "ARRIVAL"}
+  ]
+}
+```
+`kind`: `ENTRY`/`PASSAGE`/`ARRIVAL` (대문자). 나중에 "의심맨" 기능이
+붙으면 `"kind": "SUSPICIOUS"`, `"identity_status": "KNOWN"` 같은 형태로
+같은 엔드포인트에 섞여 올 예정 — Django 쪽 파서가 모르는 kind 는 무시
+하도록 짜두면 된다.
+
+### `GET /api/stats`
+```json
+{"persons_total": 4, "visits_total": 7, "active_journeys": 1,
+ "completed_journeys": 6, "suspicious_total": 0}
+```
+
+### `GET /api/journeys?limit=<n>` — ★ 신규 요청 (§2-1 화면용, 확인 필요)
+
+"현재/최근 이동 목록"·"사람 상세"·"검토 필요" 세 화면 전부 이 엔드포인트
+하나로 채우도록 설계했다. `since` 커서 없이 매번 최근 N건을 통째로
+다시 준다 — 검토 대기(`MANUAL_REVIEW_REQUIRED`) 상태였던 여정이 나중에
+`REVISIT`/`NEW` 로 바뀌는 걸 놓치지 않으려면(하나의 `journey_id` 가
+시간이 지나 값이 바뀌는 케이스), since 로 앞부분을 건너뛰는 방식은
+위험하다고 판단했다. Django 쪽은 `journey_id` 를 유니크 키로
+`update_or_create` 해서 재수신을 그냥 덮어쓴다.
+
+```json
+{
+  "journeys": [
+    {
+      "journey_id": "J000104",
+      "temporary_person_uid": "P000072",
+      "initial_decision": "IDENTITY_PENDING",
+      "candidate_person_uid": "P000006",
+      "final_candidate_person_uid": "P000006",
+      "canonical_person_uid": "P000006",
+      "final_review_result": "REVISIT",
+      "final_scores": 0.850,
+      "person_status": "COMPLETED",
+      "route": "A -> C -> D",
+      "entry_at": "2026-08-11T10:00:00+09:00",
+      "d_exit_at": "2026-08-11T10:00:18+09:00",
+      "journey_elapsed_seconds": 18.141,
+      "visit_count": 12
+    }
   ]
 }
 ```
 
-- `kind`: `entry`(A) / `passage`(B) / `arrival`(D) 정도로 제안
-- `confirmed`가 여기 있어야 카메라별로 등록/미등록 알림을 실시간으로
-  띄울 수 있다 — **제일 중요한 필드.**
-
-### `GET /api/stats?days=7|14|30`
-인원 통계 패널용.
-
-```json
-{"registered": 12, "unregistered": 3, "total": 15}
-```
-
-### `GET /api/status`
-헬스체크 + "감지 상태" 배지용.
-
-```json
-{"broker_connected": true, "persons_total": 42, "last_event_at": "2026-08-10T10:03:12+09:00"}
-```
+- `MANUAL_REVIEW_REQUIRED` 인 동안은 `canonical_person_uid` 를 빈 문자열
+  또는 필드 자체를 생략해서 보내면 된다 — Django 는 이 값이 없으면
+  `Person` 을 아예 만들지 않는다(§2-1).
+- `final_scores` 는 예시처럼 숫자 하나든, 후보별 점수 dict 든 상관없다
+  (Django 는 그대로 JSON 으로 저장만 하고 그대로 화면에 보여준다).
+- `limit` 기본값 100 정도로 가정하고 폴링 중 — 다르게 쓰고 싶으면 알려
+  주면 맞춘다.
+- 위 필드명은 B가 보낸 "웹 연동 기준" 메시지의 필드명을 그대로 썼다.
+  실제 API가 이 이름과 다르게 나가면(예: `d_exit_at` 대신 `exit_at`)
+  꼭 알려달라 — Django 쪽 `tracking/main_api_ingest.py::ingest_journey()`
+  하나만 고치면 되니 빠르게 맞출 수 있다.
 
 ---
 
-## 6. 우리(Django 대시보드) 쪽 접속 정보 — B가 필요할 때 참고
+## 5. Django(C) 쪽 구현 현황 — 2026-08-11 작업분
 
-- **이 PC의 사내망 IP**: `10.10.20.26` (Jetson·중앙서버와 같은 `10.10.20.0/24`
-  대역). API에 접근 제한(화이트리스트)을 걸 거라면 이 IP를 허용해주면 된다.
-- **대시보드 서버 포트**: `8000` (daphne, `0.0.0.0:8000`으로 띄움)
-- **요청 방식/주기**: 지금은 브라우저가 Django를 1초 간격으로 폴링하고,
-  Django가 그때그때 필요한 걸 계산해서 응답하는 구조다. B의 API를 붙이면
-  Django가 **같은 1초 주기로 B의 API를 호출**하는 걸 기본으로 생각하고
-  있다 — 너무 잦으면(부하 문제 등) 주기를 늦추거나, `since` 파라미터로
-  변경분만 받는 방식(5번의 `/api/events?since=`)으로 부하를 줄일 수 있다.
-- **인증**: 지금 우리 쪽엔 별도 인증 체계가 없다 — 사내망이라 없어도 된다고
-  가정했는데, B가 API 키 같은 걸 요구하면 맞춰서 헤더에 실어 보내면 된다.
-- **연동 코드가 들어갈 위치**: `web/tracking/` 안에 API 클라이언트 모듈을
-  새로 추가하고(`mqtt_worker.py`/`mqtt_ingest.py`를 대체), 기존 `Person`/
-  `Event` 모델에 매핑해서 넣을 예정 — B의 응답 필드 이름이 정해지면 그거
-  기준으로 매핑 코드를 짠다.
+**완료:**
+
+| 파일 | 내용 |
+|---|---|
+| `tracking/models.py` | `RuntimeConfig.main_server_host`/`main_server_port`(기본 `10.10.20.33`/`8080`, admin에서 편집 가능) 추가. `Person.visit_count` 추가. `Person.external_id` 는 이제 `person_uid` 저장용으로 의미 변경(스키마는 그대로) |
+| `tracking/main_api_ingest.py` (신규) | `/api/events` 이벤트 1건 → `Person`/`Tracklet`/`Event` 매핑. `ENTRY`/`PASSAGE`/`ARRIVAL` 전부 우리 쪽 "진입" 이벤트로 취급(카메라별 알림 트리거용). `/api/persons` → `visit_count` 동기화 |
+| `main_server_worker.py` (신규, `mqtt_worker.py` 대체) | 1초마다 `/api/events?since=` 폴링, 30틱마다 `/api/persons` 동기화. `RuntimeConfig.detection_enabled` 끄면 폴링 자체를 쉼("감지 on/off" 스위치가 이제 이 폴링을 제어). 메인 서버 API 가 아직 없어도 안 죽고 계속 재시도(연결 실패를 정상 상태로 처리) |
+| `tracking/views.py` | `/api/state/` 응답 필드명 `mqtt_connected`→`main_connected`, `jetson_entries_total`→`main_events_total` 로 변경 |
+| `tracking/templates/tracking/dashboard.html` | 위 필드명 변경 반영, "감지 상태" 배지가 이제 메인 서버 API 연결 여부를 표시 |
+| `tracking/models.py` (신규) | `Journey` 모델 추가 — §2-1 의 Final Identity Review 필드(`temporary_person_uid`/`candidate_person_uid`/`final_candidate_person_uid`/`canonical_person_uid`/`final_review_result`/`final_scores`) + 여정 정보(`route`/`entry_at`/`d_exit_at`/`journey_elapsed_seconds`/`visit_count`/`person_status`) 전부 저장. `MANUAL_REVIEW_REQUIRED` 인 동안은 `Journey.person` 이 null |
+| `tracking/main_api_ingest.py` | `ingest_journey()` 추가 — §4-2 스펙의 응답 1건을 `Journey`(+확정되면 `Person`)로 적재 |
+| `main_server_worker.py` | `/api/journeys?limit=` 폴링 추가(§4-2). 아직 없는 엔드포인트라 실패해도 기존 `/api/events` 연결 상태(`main_connected`)에는 영향 안 주게 따로 감쌈 |
+| `tracking/views.py`, `urls.py` | "현재/최근 이동 목록"(`/journeys/`) · "사람 상세"(`/persons/<person_uid>/`) 조회 전용 화면 추가. 둘 다 로그인 필요 |
+| `tracking/templates/tracking/journeys.html`, `person_detail.html` (신규) | 위 화면 — 검토 필요(`MANUAL_REVIEW_REQUIRED`) 목록은 상단에 별도 강조, 확정된 여정만 canonical `person_uid` 로 인물 상세 링크가 걸림(`temporary_person_uid` 는 링크 안 걸림) |
+| `tracking/admin.py` | `Journey` admin 등록 — 전부 읽기 전용(add/delete 불가, 필드 전부 readonly). MERGE_EXISTING/CONFIRM_NEW 액션 버튼은 다음 단계(§4-2, 아직 REST API 미확정) |
+
+**확인함**: `main_server_worker.py`를 실제로 띄워서 `10.10.20.33:8080`이
+아직 응답 없는 상태에서 `main_connected: false` 로 정상 폴백되는 것,
+크래시 안 하는 것 확인 완료. `ingest_journey()` 도 이 문서의 Live/Manual
+Review 예시 두 건을 그대로 넣어서 REVISIT 은 canonical `P000006` 으로
+정상 연결, MANUAL_REVIEW_REQUIRED 는 `Person` 미생성으로 정상 동작하는
+것까지 로컬에서 확인 완료(테스트 데이터는 확인 후 삭제함).
+
+**대기 중**: B 가 `/api/status` 를 `0.0.0.0:8080` 으로 띄우면 —
+`http://10.10.20.33:8080/api/status` 가 이 PC(10.10.20.26)에서 열리는지
+확인 후 바로 실제 데이터로 테스트 시작.
+
+**대기 중 (2)**: `/api/journeys` 는 아직 B가 안 만들었을 수 있어서
+§4-2 스펙을 "제안"으로 보낸다 — 필드명/모양 확인해서 알려주면 그대로
+붙는다. 지금은 이 엔드포인트가 없어도(404/타임아웃) `main_server_worker.py`
+가 죽지 않고 계속 재시도만 한다.
+
+**아직 안 한 것 (필요시 추가 논의)**:
+- `/api/stats` 소비 — 지금은 로컬 DB(메인 서버 이벤트로 채워진 Person/Event)
+  기준으로 자체 계산 중이라 당장 안 급함
+- Manual Review 화면의 실제 액션(`MERGE_EXISTING`/`CONFIRM_NEW`) — B 계획대로
+  조회 전용 먼저 붙였고, 이 버튼용 REST API(POST 엔드포인트) 는 다음 단계에서 논의
+- `SUSPICIOUS` kind 처리 — 그 기능 붙을 때 같이
 
 ---
 
-## 7. B에게 확인 요청 (정리)
+## 6. 우리(Django 대시보드) 쪽 접속 정보
 
-1. ~~A 진입 페이로드~~ → **확인 완료** (3번). **B(재식별)/D(도착) 페이로드도
-   같은 식으로 실제 예시를 받고 싶다** — `journey_id`/`person_uid`가 정확히
-   어느 이벤트에서 처음 생기는지 이걸 봐야 확정된다.
-2. `journey_id`와 별개로 "등록된 사람" 단위 식별자(`person_id` 같은 것)가
-   있는지, 있다면 그 테이블/컬럼 이름 (4번)
-3. 위 API 4개(5번) 그대로 가도 되는지 / 바꾸고 싶은 부분
-4. API 서버 기술 스택 (Flask/FastAPI/Django 등) — Django 클라이언트 코드
-   작성에 영향은 없지만 참고용
-5. 테스트용으로 노드 하나만이라도 잠깐 켜서 이벤트를 흘려줄 수 있는지 —
-   지금 10.10.20.33 브로커를 직접 구독해봤는데 실시간 트래픽이 전혀 없어서
-   실제 페이로드 필드를 못 봤다
+- **이 PC의 사내망 IP**: `10.10.20.26`
+- **대시보드 서버 포트**: `8000` (daphne)
+- **요청 주기**: 1초 폴링 (부하 크면 `since` 로 조정 가능)
+- **인증**: 지금 없음, 필요하면 헤더로 맞춤
 
-이 답이 오면 바로 `mqtt_worker.py`/`mqtt_ingest.py` 자리를 이 API를 호출하는
-클라이언트 모듈로 교체하는 작업 시작하겠음.
+---
+
+## 7. 남은 질문 (급하지 않음)
+
+1. `/api/persons`의 `status` 필드가 가질 수 있는 값 전부 (`COMPLETED` 외에
+   뭐가 더 있는지 — 카메라 테두리 상태 표시에 참고하면 좋음)
+2. API 서버 재시작/배포 시 Django 쪽에 미리 알려줄 방법이 있으면 좋음
+   (없어도 폴링이 알아서 재연결하긴 함)

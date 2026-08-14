@@ -2,7 +2,7 @@
 from django.db import transaction
 
 from . import bus
-from .models import Event, Person, Snapshot, Tracklet
+from .models import Event, Journey, Person, Snapshot, Tracklet
 
 
 @transaction.atomic
@@ -23,6 +23,15 @@ def merge_persons(persons):
     Tracklet.objects.filter(person_id__in=drop_ids).update(person=keep)
     Snapshot.objects.filter(person_id__in=drop_ids).update(person=keep)
     Event.objects.filter(person_id__in=drop_ids).update(person=keep)
+    # 2026-08-12: 인물 상세 페이지 "수정 → 병합" 요청으로 붙임 — 흡수될
+    # 인물이 Journey.person/local_match_person 으로도 걸려 있을 수 있고,
+    # 다른 사람의 Event.resolved_person(§"보류" 처리로 지정된 실제 인물)
+    # 으로 가리켜졌을 수도 있다. SET_NULL 이라 그냥 두면 delete() 때
+    # 자동으로 null 처리되는데, 그러면 "누구인지" 정보가 사라지니 keep 으로
+    # 옮겨서 병합 후에도 그대로 남게 한다.
+    Journey.objects.filter(person_id__in=drop_ids).update(person=keep)
+    Journey.objects.filter(local_match_person_id__in=drop_ids).update(local_match_person=keep)
+    Event.objects.filter(resolved_person_id__in=drop_ids).update(resolved_person=keep)
 
     last = max((p.last_seen for p in persons), default=keep.last_seen)
     first = min((p.created_at for p in persons), default=keep.created_at)

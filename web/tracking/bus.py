@@ -11,6 +11,7 @@ Redis 가 없으면 /tmp 파일로 자동 폴백한다. 개발 중에 Redis 안 
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from django.conf import settings
@@ -40,7 +41,19 @@ def _set_raw(key: str, value: bytes) -> None:
     p = _fpath(key)
     tmp = p.with_suffix(".tmp")
     tmp.write_bytes(value)
-    os.replace(tmp, p)                              # 원자적 교체
+    # Windows 에서는 대상 파일을 다른 프로세스(백신 실시간 검사, 동시 읽기 등)가
+    # 순간적으로 잠그고 있으면 os.replace 가 PermissionError(WinError 5)로 실패
+    # 할 수 있다 — 2026-08-11 밤 main_server_worker.py 가 이걸로 죽은 채 방치돼
+    # 있었다(untreated exception). 로직 오류가 아니라 파일시스템 레이스라
+    # 짧게 재시도하면 거의 바로 풀린다.
+    for attempt in range(5):
+        try:
+            os.replace(tmp, p)                      # 원자적 교체
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.02 * (attempt + 1))
 
 
 def _get_raw(key: str):

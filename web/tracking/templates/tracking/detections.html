@@ -1,0 +1,287 @@
+{% load static %}<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>미등록자 감지 전체 기록 · 열정강혁 통합관제</title>
+<link rel="stylesheet" href="{% static 'tracking/journey_pages.css' %}">
+<style>
+.filters{display:flex;gap:16px;flex-wrap:wrap;align-items:center;padding:12px 14px;
+  border-bottom:1px solid var(--rule)}
+.filters .f{display:flex;align-items:center;gap:8px}
+.filters label{font-family:var(--mono);font-size:11px;letter-spacing:.1em;
+  color:var(--dimmer);text-transform:uppercase}
+.filters select{background:var(--panel-3);color:var(--text);border:1px solid var(--rule-2);
+  border-radius:3px;padding:6px 10px;font-size:13.2px}
+.filter-reset{font-family:var(--mono);font-size:12px;color:var(--dimmer);margin-left:auto}
+.filter-reset:hover{color:var(--alert)}
+tr.date-sep td{background:var(--panel-3);color:var(--dim);font-family:var(--mono);
+  font-size:11.5px;letter-spacing:.08em;padding:6px 12px;text-transform:uppercase}
+tr.date-sep:hover td{background:var(--panel-3)}
+.status-tag{display:inline-block;padding:2px 9px;border-radius:3px;font-family:var(--mono);
+  font-size:11px;font-weight:600;white-space:nowrap}
+.status-tag.confirmed{background:#264d33;color:var(--ok)}
+.status-tag.error{background:#4a2020;color:var(--alert)}
+.status-tag.pending{background:var(--panel-3);color:var(--dimmer)}
+.review-btns{display:flex;gap:6px}
+.review-btns button{font-size:12px;padding:3px 10px;border-radius:3px;cursor:pointer;
+  border:1px solid var(--rule-2);background:var(--panel-3);color:var(--dim);transition:.14s}
+.review-btns button:hover{color:var(--text);border-color:var(--calm)}
+.reviewed-by{font-family:var(--mono);font-size:11.5px;color:var(--dimmer);margin-right:8px}
+.btn-undo{font-size:11px;padding:2px 8px;border-radius:3px;cursor:pointer;
+  border:1px solid var(--rule-2);background:none;color:var(--dimmer);transition:.14s}
+.btn-undo:hover{color:var(--alert);border-color:var(--alert)}
+.pager{display:flex;gap:14px;align-items:center;justify-content:center;padding:14px;
+  font-family:var(--mono);font-size:13px;border-top:1px solid var(--rule)}
+tr.resolved{opacity:.55}
+.det-thumb{width:44px;height:58px;object-fit:cover;border-radius:3px;
+  background:#000;border:1px solid var(--rule)}
+.det-thumb-empty{display:grid;place-items:center;font-family:var(--mono);
+  font-size:8.5px;color:var(--dimmer);text-align:center}
+
+/* ── "오류" 처리 후보 선택 모달 (dashboard.html 과 동일) ───────────── */
+.review-modal{position:fixed;inset:0;z-index:100;display:flex;
+  align-items:center;justify-content:center}
+/* [hidden] 은 브라우저 기본 display:none 인데, 위 .review-modal{display:flex}
+   가 같은 우선순위라 그걸 덮어써서 hidden 속성을 무시하고 항상 떠 있던
+   버그(2026-08-12 실제 발생) — 속성 선택자를 더 구체적으로 걸어서 고침. */
+.review-modal[hidden]{display:none}
+.review-modal-backdrop{position:absolute;inset:0;background:#000a}
+.review-modal-box{position:relative;width:min(420px,92vw);max-height:80vh;
+  display:flex;flex-direction:column;background:var(--panel);
+  border:1px solid var(--rule);border-radius:6px;box-shadow:0 20px 50px #000a;
+  overflow:hidden}
+.review-modal-head{display:flex;align-items:center;justify-content:space-between;
+  padding:12px 14px;border-bottom:1px solid var(--rule);font-size:14px;font-weight:600}
+.review-modal-head button{background:none;border:none;color:var(--dim);
+  font-size:16px;cursor:pointer;line-height:1}
+.review-modal-head button:hover{color:var(--text)}
+.review-modal-search{margin:10px 14px 0;padding:8px 10px;background:var(--panel-3);
+  border:1px solid var(--rule-2);border-radius:3px;color:var(--text);font-size:13.5px}
+.review-modal-list{flex:1;overflow-y:auto;padding:10px 14px;min-height:120px;
+  display:flex;flex-direction:column;gap:6px}
+.review-cand{display:flex;align-items:center;gap:10px;padding:6px 8px;
+  border-radius:4px;cursor:pointer;border:1px solid transparent;background:var(--panel-2)}
+.review-cand:hover{border-color:var(--calm)}
+.review-cand img,.review-cand-noimg{width:36px;height:48px;object-fit:cover;
+  border-radius:3px;background:#000;border:1px solid var(--rule);flex:0 0 auto}
+.review-cand-noimg{display:grid;place-items:center;font-family:var(--mono);
+  font-size:7px;color:var(--dimmer)}
+.review-cand-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+.review-cand-id{font-family:var(--mono);font-weight:700;font-size:13.5px;color:var(--text)}
+.review-cand-meta{font-family:var(--mono);font-size:11px;color:var(--dimmer)}
+.review-modal-manual{display:flex;align-items:center;gap:8px;padding:12px 14px;
+  border-top:1px solid var(--rule);flex-wrap:wrap;font-size:12px;color:var(--dim)}
+.review-modal-manual input{flex:1;min-width:100px;background:#000;
+  border:1px solid var(--calm);color:var(--text);padding:6px 8px;border-radius:3px;
+  font-family:var(--mono);font-size:12.5px}
+.review-modal-manual button{flex:0 0 auto;font-size:12.5px;padding:6px 12px;
+  border-radius:3px;cursor:pointer;border:1px solid var(--rule-2);
+  background:var(--panel-3);color:var(--dim);transition:.14s}
+.review-modal-manual button:hover{color:var(--text);border-color:var(--calm)}
+</style>
+</head>
+<body>
+{% csrf_token %}
+
+<div class="bar">
+  <div class="brand"><a href="{% url 'dashboard' %}" title="대시보드"><img class="brand-logo"
+    src="{% static 'tracking/logo_ver2.png' %}" alt="WOODIGANI"></a></div>
+  <div class="page-title">미등록자 감지 전체 기록</div>
+  <div class="spacer"></div>
+  <a class="back-link" href="{% url 'dashboard' %}">← 대시보드</a>
+</div>
+
+<section class="panel">
+  <form class="filters" method="get">
+    <div class="f"><label>카메라</label>
+      <select name="camera" onchange="this.form.submit()">
+        <option value="">전체</option>
+        {% for c in cameras %}
+        <option value="{{ c.index }}" {% if cam_filter == c.index|stringformat:"s" %}selected{% endif %}>{{ c.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="f"><label>상태</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value="">전체</option>
+        <option value="pending" {% if status_filter == "pending" %}selected{% endif %}>대기(미확인)</option>
+        <option value="confirmed" {% if status_filter == "confirmed" %}selected{% endif %}>확인</option>
+        <option value="error" {% if status_filter == "error" %}selected{% endif %}>보류</option>
+      </select>
+    </div>
+    <div class="f"><label>날짜</label>
+      <select name="date" onchange="this.form.submit()">
+        <option value="">전체 기간</option>
+        {% for d in available_dates %}
+        <option value="{{ d|date:'Y-m-d' }}" {% if date_filter == d|date:"Y-m-d" %}selected{% endif %}>{{ d|date:"Y-m-d (D)" }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% if cam_filter or status_filter or date_filter %}
+    <a class="filter-reset" href="{% url 'detections' %}">필터 초기화</a>
+    {% endif %}
+  </form>
+
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>사진</th><th>시각</th><th>카메라</th><th>인물</th><th>상태</th><th>처리</th>
+    </tr></thead>
+    <tbody id="det-body">
+    {% for e in page_obj %}
+    {% ifchanged e.local_date %}
+    <tr class="date-sep"><td colspan="6">{{ e.local_date|date:"Y-m-d (D)" }}</td></tr>
+    {% endifchanged %}
+    <tr data-event-id="{{ e.pk }}" class="{% if e.review_status %}resolved{% endif %}">
+      <td>{% if e.thumb_url %}<img class="det-thumb" src="{{ e.thumb_url }}" alt="" loading="lazy">{% else %}<div class="det-thumb det-thumb-empty">NO IMG</div>{% endif %}</td>
+      <td class="num">{{ e.at|date:"Y-m-d H:i:s" }}</td>
+      <td class="mono">{{ e.camera.name|default:"—" }}</td>
+      <td class="mono">{% if e.person.external_id %}<a class="pid" href="{% url 'person_detail' e.person.external_id %}">{{ e.person.external_id }}</a>{% else %}{{ e.person }}{% endif %}</td>
+      <td>
+        {% if e.review_status == "confirmed" %}<span class="status-tag confirmed">확인</span>
+        {% elif e.review_status == "error" %}<span class="status-tag error">보류 → {{ e.resolved_person.external_id|default:"—" }}</span>
+        {% else %}<span class="status-tag pending">대기</span>{% endif %}
+      </td>
+      <td>
+        {% if not e.review_status %}
+        <div class="review-btns" data-event-id="{{ e.pk }}">
+          <button type="button" class="btn-confirm">확인</button>
+          <button type="button" class="btn-error">보류</button>
+        </div>
+        {% else %}
+        <span class="reviewed-by">{{ e.reviewed_by.username|default:"—" }} · {{ e.reviewed_at|date:"H:i" }}</span>
+        <button type="button" class="btn-undo" data-event-id="{{ e.pk }}">취소</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="6" class="empty">기록이 없다.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  <div class="pager">
+    {% if page_obj.has_previous %}<a href="?page={{ page_obj.previous_page_number }}&camera={{ cam_filter }}&status={{ status_filter }}&date={{ date_filter }}">← 이전</a>{% endif %}
+    <span>{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+    {% if page_obj.has_next %}<a href="?page={{ page_obj.next_page_number }}&camera={{ cam_filter }}&status={{ status_filter }}&date={{ date_filter }}">다음 →</a>{% endif %}
+  </div>
+</section>
+
+<div class="review-modal" id="review-modal" hidden>
+  <div class="review-modal-backdrop"></div>
+  <div class="review-modal-box">
+    <div class="review-modal-head">
+      <span>실제 인물 선택</span>
+      <button type="button" class="review-modal-close" aria-label="닫기">✕</button>
+    </div>
+    <input type="text" class="review-modal-search" placeholder="person_uid 또는 이름 검색…">
+    <div class="review-modal-list"></div>
+    <div class="review-modal-manual">
+      <span>목록에 없으면 직접 입력:</span>
+      <input type="text" class="review-modal-manual-input" placeholder="예: P000006">
+      <button type="button" class="review-modal-manual-go">연결</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s){return String(s??'').replace(/[&<>"]/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+const CSRF = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+async function sendReview(id, params){
+  const body = new URLSearchParams(params);
+  const res = await fetch(`/api/detections/${id}/review/`, {method:'POST', body,
+    headers:{'X-CSRFToken':CSRF}});
+  if(res.status === 302 || res.redirected){ location.href = '/admin/login/?next=/detections/'; return {ok:false}; }
+  return res.json();
+}
+
+document.getElementById('det-body').addEventListener('click', async ev => {
+  const confirmBtn = ev.target.closest('.btn-confirm');
+  const errorBtn = ev.target.closest('.btn-error');
+  if(!confirmBtn && !errorBtn) return;
+  const wrap = ev.target.closest('.review-btns');
+  const id = wrap.dataset.eventId;
+
+  if(confirmBtn){
+    const r = await sendReview(id, {status: 'confirmed'});
+    if(r.ok) location.reload();
+    return;
+  }
+  // 오류 — 사진 포함 후보 모달에서 실제 인물을 고르거나, 없으면 직접 입력
+  const uid = await openReviewModal();
+  if(!uid) return;
+  const r = await sendReview(id, {status: 'error', person_uid: uid});
+  if(!r.ok){ alert(r.error || '연결 실패'); return; }
+  location.reload();
+});
+
+document.getElementById('det-body').addEventListener('click', async ev => {
+  const undoBtn = ev.target.closest('.btn-undo');
+  if(!undoBtn) return;
+  const r = await sendReview(undoBtn.dataset.eventId, {status: 'pending'});
+  if(r.ok) location.reload();
+  else alert(r.error || '취소 실패');
+});
+
+/* ── "오류" 후보 선택 모달 (dashboard.html 과 동일 로직) ───────────── */
+const reviewModal       = document.getElementById('review-modal');
+const reviewModalList   = reviewModal.querySelector('.review-modal-list');
+const reviewModalSearch = reviewModal.querySelector('.review-modal-search');
+const reviewModalManual = reviewModal.querySelector('.review-modal-manual-input');
+let reviewModalResolve  = null;
+
+function openReviewModal(){
+  reviewModal.hidden = false;
+  reviewModalSearch.value = '';
+  reviewModalManual.value = '';
+  loadReviewCandidates('');
+  reviewModalSearch.focus();
+  return new Promise(resolve => { reviewModalResolve = resolve; });
+}
+function closeReviewModal(result){
+  reviewModal.hidden = true;
+  if(reviewModalResolve){ reviewModalResolve(result); reviewModalResolve = null; }
+}
+async function loadReviewCandidates(q){
+  reviewModalList.innerHTML = '<p class="empty">불러오는 중…</p>';
+  let data;
+  try{ data = await (await fetch(`/api/persons/search/?q=${encodeURIComponent(q)}`)).json(); }
+  catch(e){ reviewModalList.innerHTML = '<p class="empty">불러오기 실패</p>'; return; }
+  if(!data.results.length){
+    reviewModalList.innerHTML = '<p class="empty">비슷한 인물이 없다 — 아래에서 직접 입력.</p>';
+    return;
+  }
+  reviewModalList.innerHTML = data.results.map(p => `
+    <div class="review-cand" data-uid="${esc(p.person_uid)}">
+      ${p.thumb_url ? `<img src="${esc(p.thumb_url)}" alt="" loading="lazy">`
+                    : '<div class="review-cand-noimg">NO IMG</div>'}
+      <div class="review-cand-info">
+        <span class="review-cand-id">${esc(p.person_uid)}</span>
+        <span class="review-cand-meta">${p.label ? esc(p.label)+' · ' : ''}방문 ${p.visit_count}회${p.confirmed ? ' · 등록됨' : ''}</span>
+      </div>
+    </div>`).join('');
+  reviewModalList.querySelectorAll('.review-cand').forEach(el => {
+    el.onclick = () => closeReviewModal(el.dataset.uid);
+  });
+}
+let reviewSearchTimer = null;
+reviewModalSearch.oninput = () => {
+  clearTimeout(reviewSearchTimer);
+  reviewSearchTimer = setTimeout(() => loadReviewCandidates(reviewModalSearch.value.trim()), 200);
+};
+reviewModal.querySelector('.review-modal-close').onclick = () => closeReviewModal(null);
+reviewModal.querySelector('.review-modal-backdrop').onclick = () => closeReviewModal(null);
+reviewModal.querySelector('.review-modal-manual-go').onclick = () => {
+  const v = reviewModalManual.value.trim();
+  closeReviewModal(v || null);
+};
+reviewModalManual.onkeydown = e => {
+  if(e.key === 'Enter') reviewModal.querySelector('.review-modal-manual-go').click();
+};
+</script>
+</body>
+</html>
