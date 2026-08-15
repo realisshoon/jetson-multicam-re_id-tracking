@@ -5,6 +5,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import unittest
@@ -21,6 +22,8 @@ from src.nodes.node_c import (
     add_temporal_candidate,
     build_passage_payload,
     calculate_gallery_diagnostics,
+    finalize_partial_temporal_window,
+    promote_confirmation_observations,
     try_add_gallery,
     selected_temporal_candidates,
     validate_c_passage_evidence,
@@ -223,7 +226,7 @@ class NodeCPassageE2ETest(unittest.TestCase):
         bank: list[dict] = []
         observed: list[dict] = []
         client = Mock()
-        client.publish.return_value = SimpleNamespace(rc=mqtt.MQTT_ERR_SUCCESS)
+        client.publish.return_value = SimpleNamespace(rc=mqtt.MQTT_ERR_SUCCESS, mid=101)
         reference = {
             "person_uid": "P-MOVING", "entry_timestamp": "2026-08-14T13:34:09+09:00",
             "incoming_gallery": incoming, "a_local_id": "",
@@ -236,6 +239,7 @@ class NodeCPassageE2ETest(unittest.TestCase):
              patch.object(node_c, "append_jsonl") as append_jsonl, \
              patch.object(node_c, "append_csv"), \
              patch.object(node_c, "mark_passed"), \
+             patch.object(node_c, "log_revisit_event"), \
              patch("builtins.print") as print_mock:
             frame_index = 0
             for window_index, window_score in enumerate(similarity_windows, start=1):
@@ -340,7 +344,8 @@ class NodeCPassageE2ETest(unittest.TestCase):
             "incoming_gallery": a_gallery, "a_local_id": "",
         }
         with patch.object(node_c, "candidate_reference", return_value=reference), \
-             patch.object(node_c, "append_jsonl") as append_jsonl:
+             patch.object(node_c, "append_jsonl") as append_jsonl, \
+             patch.object(node_c, "log_revisit_event"):
             published = node_c.publish_passage(
                 client, 77, "J000050", c_embeddings,
                 np.zeros((8, 8, 3), dtype=np.uint8), 0.83, 0.7348398,
@@ -372,7 +377,7 @@ class NodeCPassageE2ETest(unittest.TestCase):
 
     def test_positive_actual_publish_path_excludes_unselected_observation(self) -> None:
         client = Mock()
-        client.publish.return_value = SimpleNamespace(rc=mqtt.MQTT_ERR_SUCCESS)
+        client.publish.return_value = SimpleNamespace(rc=mqtt.MQTT_ERR_SUCCESS, mid=102)
         reference = {
             "person_uid": "P-E2E-1", "entry_timestamp": "2026-08-14T09:00:00+09:00",
             "incoming_gallery": self.payload["gallery"][:1], "a_local_id": 7,
@@ -386,7 +391,8 @@ class NodeCPassageE2ETest(unittest.TestCase):
              patch.object(node_c, "save_match_capture", return_value="capture.jpg"), \
              patch.object(node_c, "append_jsonl"), \
              patch.object(node_c, "append_csv"), \
-             patch.object(node_c, "mark_passed"):
+             patch.object(node_c, "mark_passed"), \
+             patch.object(node_c, "log_revisit_event"):
             published = node_c.publish_passage(
                 client, 31, "J-E2E-1", self.c_embeddings,
                 np.zeros((8, 8, 3), dtype=np.uint8), 0.86, 0.95,
@@ -398,6 +404,49 @@ class NodeCPassageE2ETest(unittest.TestCase):
         self.assertEqual(len(wire_payload["per_frame_best_scores"]), 2)
         self.assertNotIn(0.123456, wire_payload["per_frame_best_scores"])
         self.assertEqual(wire_payload["quality_samples"], [0.86, 0.84])
+
+    def test_revisit_log_is_structured_and_contains_no_raw_embedding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "camera_c_revisit.jsonl"
+            payload = {
+                "event": "CANDIDATE",
+                "stage": "WAITING_B_OR_C",
+                "request_id": "REQ-1",
+                "journey_id": "J-LOG-1",
+                "person_uid": "P-LOG-1",
+                "entry_timestamp": "2026-08-14T09:00:00+09:00",
+                "gallery": [{
+                    "node_id": "A", "embedding_dim": 512,
+                    "embedding": unit(0).tolist(), "quality": 0.91,
+                }],
+            }
+            with patch.object(node_c, "REVISIT_LOG", log_path), \
+                 patch.object(node_c, "REVISIT_RUN_ID", "RUN-LOG-1"), \
+                 patch.dict(node_c.candidates, {}, clear=True), \
+                 patch.object(node_c, "append_csv"):
+                node_c.save_candidate(payload)
+                node_c.pending_passage_pubacks[77] = {
+                    "request_id": "REQ-1", "journey_id": "J-LOG-1",
+                    "person_uid": "P-LOG-1", "local_track_id": 7,
+                    "topic": node_c.PASSAGE_TOPIC, "rc": 0,
+                }
+                node_c.on_publish(None, None, 77, 0, None)
+
+            lines = log_path.read_text(encoding="utf-8").splitlines()
+            records = [json.loads(line) for line in lines]
+            self.assertEqual(
+                [record["event"] for record in records],
+                ["C_CANDIDATE_RECEIVED", "C_CANDIDATE_ACTIVATED", "C_PASSAGE_PUBLISH"],
+            )
+            received = records[0]
+            self.assertEqual(received["request_id"], "REQ-1")
+            self.assertEqual(received["samples"][0]["embedding_dim"], 512)
+            self.assertAlmostEqual(received["samples"][0]["norm"], 1.0)
+            self.assertEqual(received["samples"][0]["quality"], 0.91)
+            self.assertTrue(records[-1]["puback"])
+            serialized = "\n".join(lines).lower()
+            self.assertNotIn('"embedding":', serialized)
+            self.assertNotIn('"token"', serialized)
 
     def test_main_transition_single_d_publish_and_duplicate_idempotency(self) -> None:
         main = TemporaryMain()
@@ -488,8 +537,311 @@ class NodeCPassageE2ETest(unittest.TestCase):
                     client.disconnect()
                 except Exception:
                     pass
-            broker.terminate()
-            broker.wait(timeout=3)
+    def test_confirmation_observations_reuse_enables_passage_on_normal_short_walk(self) -> None:
+        """A. Normal walk short transit: confirmation seeds complete Window 1, and post-match completes Window 2."""
+        incoming = [{
+            "node_id": "A", "captured_at": "2026-08-15T10:00:00+09:00",
+            "embedding_dim": 512, "embedding": unit(0).tolist(), "quality": 0.92,
+        }]
+        candidate_id = "J-SHORT-1"
+        reference = {
+            "person_uid": "P-SHORT-1", "entry_timestamp": "2026-08-15T10:00:00+09:00",
+            "incoming_gallery": incoming, "a_local_id": 5,
+        }
+
+        # 3 confirmation observations (MATCH_CONFIRMATIONS = 3)
+        confirmation_seeds = [
+            {"embedding": unit(0, 0.02), "quality": 0.85, "frame_index": 3,
+             "crop": np.zeros((10, 10, 3), dtype=np.uint8), "candidate_id": candidate_id, "score": 0.88},
+            {"embedding": unit(0, 0.03), "quality": 0.87, "frame_index": 6,
+             "crop": np.zeros((10, 10, 3), dtype=np.uint8), "candidate_id": candidate_id, "score": 0.89},
+            {"embedding": unit(0, 0.01), "quality": 0.86, "frame_index": 9,
+             "crop": np.zeros((10, 10, 3), dtype=np.uint8), "candidate_id": candidate_id, "score": 0.87},
+        ]
+
+        window: list[dict] = []
+        bank: list[dict] = []
+        observed: list[dict] = []
+
+        promoted, completed = promote_confirmation_observations(
+            candidate_id, incoming, confirmation_seeds, window, bank, observed
+        )
+        self.assertEqual(len(promoted), 3)
+        self.assertTrue(completed)
+        self.assertEqual(len(bank), 1)
+        self.assertEqual(len(observed), 3)
+
+        # 3 post-match observations
+        for offset, frame_idx in [(0.02, 12), (0.01, 15), (0.03, 18)]:
+            completed = add_temporal_candidate(
+                unit(0, offset), 0.86, frame_idx, incoming, window, bank
+            )
+        self.assertTrue(completed)
+        self.assertEqual(len(bank), 2)
+
+        selected = selected_temporal_candidates(bank)
+        self.assertEqual(len(selected), 2)
+        c_embeddings = [item["embedding"] for item in selected]
+
+        client = Mock()
+        client.publish.return_value = SimpleNamespace(rc=mqtt.MQTT_ERR_SUCCESS, mid=201)
+        with patch.object(node_c, "candidate_reference", return_value=reference), \
+             patch.object(node_c, "save_match_capture", return_value="capture.jpg"), \
+             patch.object(node_c, "append_jsonl"), \
+             patch.object(node_c, "append_csv"), \
+             patch.object(node_c, "mark_passed"), \
+             patch.object(node_c, "log_revisit_event"):
+            published = node_c.publish_passage(
+                client, 42, candidate_id, c_embeddings,
+                np.zeros((8, 8, 3), dtype=np.uint8), 0.87, 0.89,
+                observed, selected, rejection_is_final=False,
+            )
+        self.assertTrue(published)
+        client.publish.assert_called_once()
+        wire_payload = json.loads(client.publish.call_args.args[1])
+        self.assertEqual(wire_payload["journey_id"], candidate_id)
+        self.assertEqual(wire_payload["gallery_count"], 3)  # 1 A + 2 C
+        self.assertGreaterEqual(wire_payload["best_score"], 0.75)
+        self.assertGreaterEqual(wire_payload["topk_score"], 0.68)
+        self.assertGreaterEqual(wire_payload["combined_score"], 0.72)
+        self.assertEqual(wire_payload["consistency_count"], 2)
+
+    def test_baseline_j000010_strong_match_maintains_passage_success(self) -> None:
+        """B. J000010 baseline strong match: PASSAGE success maintained with high qualities and scores."""
+        a_emb = unit(0)
+        c_emb1 = unit(0, 0.8)
+        c_emb2 = unit(0, 0.82)
+
+        incoming = [{
+            "node_id": "A", "captured_at": "2026-08-15T09:00:00+09:00",
+            "embedding_dim": 512, "embedding": a_emb.tolist(), "quality": 0.95,
+        }]
+        reference = {
+            "person_uid": "P-J000010", "entry_timestamp": "2026-08-15T09:00:00+09:00",
+            "incoming_gallery": incoming, "a_local_id": 10,
+        }
+        selected = [
+            {"embedding": c_emb1, "quality": 0.949259, "best_score": float(np.dot(c_emb1, a_emb)), "gallery_selected": True},
+            {"embedding": c_emb2, "quality": 0.904701, "best_score": float(np.dot(c_emb2, a_emb)), "gallery_selected": True},
+        ]
+        gallery = [dict(item) for item in incoming]
+        gallery.extend([
+            {"node_id": "C", "embedding": c_emb1.tolist(), "quality": 0.949259},
+            {"node_id": "C", "embedding": c_emb2.tolist(), "quality": 0.904701},
+        ])
+        diagnostics = calculate_gallery_diagnostics(gallery)
+        self.assertGreaterEqual(diagnostics["best_score"], 0.75)
+        self.assertGreaterEqual(diagnostics["combined_score"], 0.72)
+
+        client = Mock()
+        client.publish.return_value = SimpleNamespace(rc=mqtt.MQTT_ERR_SUCCESS, mid=202)
+        with patch.object(node_c, "candidate_reference", return_value=reference), \
+             patch.object(node_c, "save_match_capture", return_value="capture.jpg"), \
+             patch.object(node_c, "append_jsonl"), \
+             patch.object(node_c, "append_csv"), \
+             patch.object(node_c, "mark_passed"), \
+             patch.object(node_c, "log_revisit_event"):
+            published = node_c.publish_passage(
+                client, 10, "J000010", [c_emb1, c_emb2],
+                np.zeros((8, 8, 3), dtype=np.uint8), 0.95, 0.773,
+                [], selected, rejection_is_final=False,
+            )
+        self.assertTrue(published)
+
+    def test_stranger_and_wrong_identity_never_promoted_or_published(self) -> None:
+        """C. Stranger / candidate mismatch / below boundary: confirmation samples never promoted or published."""
+        incoming = [{
+            "node_id": "A", "captured_at": "2026-08-15T09:00:00+09:00",
+            "embedding_dim": 512, "embedding": unit(0).tolist(), "quality": 0.90,
+        }]
+
+        # Candidate mismatch: seeds gathered for J-OTHER should not be promoted for J-CONFIRMED
+        seeds = [
+            {"embedding": unit(0, 0.05), "quality": 0.85, "frame_index": 3,
+             "crop": np.zeros((8, 8, 3), dtype=np.uint8), "candidate_id": "J-OTHER", "score": 0.85},
+            {"embedding": unit(0, 0.05), "quality": 0.85, "frame_index": 6,
+             "crop": np.zeros((8, 8, 3), dtype=np.uint8), "candidate_id": "J-OTHER", "score": 0.85},
+        ]
+        window: list[dict] = []
+        bank: list[dict] = []
+        observed: list[dict] = []
+        promoted, completed = promote_confirmation_observations(
+            "J-CONFIRMED", incoming, seeds, window, bank, observed
+        )
+        self.assertEqual(len(promoted), 0)
+        self.assertFalse(completed)
+        self.assertEqual(len(bank), 0)
+        self.assertEqual(len(observed), 0)
+
+        # Below-boundary similarity: e.g. similarity 0.707 < 0.75 best score fails validation
+        c_low = unit(0, 1.0)
+        gallery = [
+            {"node_id": "A", "embedding": unit(0).tolist(), "quality": 0.90},
+            {"node_id": "C", "embedding": c_low.tolist(), "quality": 0.85},
+            {"node_id": "C", "embedding": c_low.tolist(), "quality": 0.85},
+        ]
+        accepted, reason, _ = validate_c_passage_evidence(gallery)
+        self.assertFalse(accepted)
+        self.assertIn(reason, ["REJECTED_BEST_SCORE", "REJECTED_COMBINED_SCORE"])
+
+    def test_track_id_switch_strictly_isolates_evidence(self) -> None:
+        """D. Track ID switch: observations from different local tracks are never mixed."""
+        incoming = [{
+            "node_id": "A", "captured_at": "2026-08-15T09:00:00+09:00",
+            "embedding_dim": 512, "embedding": unit(0).tolist(), "quality": 0.90,
+        }]
+        tentative_obs: dict[int, list[dict]] = {
+            10: [
+                {"embedding": unit(0, 0.01), "quality": 0.85, "frame_index": 3,
+                 "crop": np.zeros((8, 8, 3), dtype=np.uint8), "candidate_id": "J-1", "score": 0.88},
+            ],
+            11: [
+                {"embedding": unit(0, 0.05), "quality": 0.86, "frame_index": 6,
+                 "crop": np.zeros((8, 8, 3), dtype=np.uint8), "candidate_id": "J-2", "score": 0.84},
+            ],
+        }
+        window10: list[dict] = []
+        bank10: list[dict] = []
+        observed10: list[dict] = []
+        promoted10, _ = promote_confirmation_observations(
+            "J-1", incoming, tentative_obs[10], window10, bank10, observed10
+        )
+        self.assertEqual(len(promoted10), 1)
+        self.assertEqual(promoted10[0]["candidate_id"], "J-1")
+
+        window11: list[dict] = []
+        bank11: list[dict] = []
+        observed11: list[dict] = []
+        promoted11, _ = promote_confirmation_observations(
+            "J-2", incoming, tentative_obs[11], window11, bank11, observed11
+        )
+        self.assertEqual(len(promoted11), 1)
+        self.assertEqual(promoted11[0]["candidate_id"], "J-2")
+
+        self.assertNotEqual(observed10[0]["quality"], observed11[0]["quality"])
+
+    def test_low_quality_frame_is_never_used_as_seed_evidence(self) -> None:
+        """E. Low quality frame (< 0.70): prohibited from seed evidence."""
+        incoming = [{
+            "node_id": "A", "captured_at": "2026-08-15T09:00:00+09:00",
+            "embedding_dim": 512, "embedding": unit(0).tolist(), "quality": 0.90,
+        }]
+        candidate_id = "J-LOW-1"
+        seeds = [
+            {"embedding": unit(0, 0.01), "quality": 0.699999, "frame_index": 3,
+             "crop": np.zeros((8, 8, 3), dtype=np.uint8), "candidate_id": candidate_id, "score": 0.88},
+            {"embedding": unit(0, 0.02), "quality": 0.65, "frame_index": 6,
+             "crop": np.zeros((8, 8, 3), dtype=np.uint8), "candidate_id": candidate_id, "score": 0.88},
+            {"embedding": unit(0, 0.03), "quality": 0.75, "frame_index": 9,
+             "crop": np.zeros((8, 8, 3), dtype=np.uint8), "candidate_id": candidate_id, "score": 0.88},
+        ]
+        window: list[dict] = []
+        bank: list[dict] = []
+        observed: list[dict] = []
+        promoted, completed = promote_confirmation_observations(
+            candidate_id, incoming, seeds, window, bank, observed
+        )
+        self.assertEqual(len(promoted), 1)
+        self.assertEqual(promoted[0]["quality"], 0.75)
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0]["quality"], 0.75)
+        self.assertFalse(completed)
+
+    def test_partial_temporal_window_finalization_on_track_lost(self) -> None:
+        """Partial window finalization: 2 valid observations in window form Window 2 on Track Lost."""
+        incoming = [{
+            "node_id": "A", "captured_at": "2026-08-15T09:00:00+09:00",
+            "embedding_dim": 512, "embedding": unit(0).tolist(), "quality": 0.90,
+        }]
+        bank: list[dict] = [{
+            "embedding": unit(0, 0.01), "quality": 0.85, "best_score": 0.90,
+            "frame_index": 9, "window_start_frame": 3, "window_end_frame": 9,
+            "gallery_selected": True,
+        }]
+        window: list[dict] = [
+            {"embedding": unit(0, 0.02), "quality": 0.84, "frame_index": 12},
+            {"embedding": unit(0, 0.03), "quality": 0.86, "frame_index": 15},
+        ]
+        finalized = finalize_partial_temporal_window(incoming, window, bank)
+        self.assertTrue(finalized)
+        self.assertEqual(len(window), 0)
+        self.assertEqual(len(bank), 2)
+
+        selected = selected_temporal_candidates(bank)
+        self.assertEqual(len(selected), 2)
+        self.assertTrue(all(item["quality"] >= C_PASSAGE_MIN_QUALITY for item in selected))
+
+    def test_duplicate_same_frame_never_counts_as_multiple_gallery(self) -> None:
+        """Case B: Passing the same frame index repeatedly never counts as multiple distinct observations or completes windows."""
+        incoming = [{"node_id": "A", "embedding": unit(0).tolist(), "quality": 0.90}]
+        window: list[dict] = []
+        bank: list[dict] = []
+
+        # Try adding the exact same frame index 3 times
+        added1 = add_temporal_candidate(unit(0, 0.01), 0.85, 10, incoming, window, bank)
+        self.assertFalse(added1)
+        self.assertEqual(len(window), 1)
+
+        # 2nd attempt with same frame_index 10 is rejected
+        added2 = add_temporal_candidate(unit(0, 0.01), 0.85, 10, incoming, window, bank)
+        self.assertFalse(added2)
+        self.assertEqual(len(window), 1)
+
+        # In promote_confirmation_observations: duplicates with same frame_index are ignored
+        observed: list[dict] = []
+        seeds = [
+            {"embedding": unit(0, 0.01), "quality": 0.85, "frame_index": 5, "candidate_id": "J-DUP", "score": 0.88},
+            {"embedding": unit(0, 0.01), "quality": 0.85, "frame_index": 5, "candidate_id": "J-DUP", "score": 0.88},
+        ]
+        promoted, completed = promote_confirmation_observations("J-DUP", incoming, seeds, window, bank, observed)
+        self.assertEqual(len(promoted), 1)
+        self.assertEqual(len(observed), 1)
+
+    def test_insufficient_evidence_only_one_sample_rejects_passage(self) -> None:
+        """Case F: If only 1 valid observation exists, validate_c_passage_evidence rejects and publish_passage fails."""
+        incoming = [{
+            "node_id": "A", "captured_at": "2026-08-15T09:00:00+09:00",
+            "embedding_dim": 512, "embedding": unit(0).tolist(), "quality": 0.90,
+        }]
+        reference = {
+            "person_uid": "P-ONLY-ONE", "entry_timestamp": "2026-08-15T09:00:00+09:00",
+            "incoming_gallery": incoming, "a_local_id": 9,
+        }
+        single_gallery = [
+            {"node_id": "A", "embedding": unit(0).tolist(), "quality": 0.90},
+            {"node_id": "C", "embedding": unit(0, 0.01).tolist(), "quality": 0.85},
+        ]
+        accepted, reason, diagnostics = validate_c_passage_evidence(single_gallery)
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "INSUFFICIENT_QUALITY")
+        self.assertIsNone(diagnostics)
+
+        client = Mock()
+        selected = [{"embedding": unit(0, 0.01), "quality": 0.85, "best_score": 0.95, "gallery_selected": True}]
+        with patch.object(node_c, "candidate_reference", return_value=reference), \
+             patch.object(node_c, "append_jsonl"), \
+             patch.object(node_c, "log_revisit_event"):
+            published = node_c.publish_passage(
+                client, 99, "J-ONLY-ONE", [unit(0, 0.01)],
+                np.zeros((8, 8, 3), dtype=np.uint8), 0.85, 0.95,
+                [], selected, rejection_is_final=True,
+            )
+        self.assertFalse(published)
+
+    def test_partial_temporal_window_rejects_empty_or_subthreshold_window(self) -> None:
+        """Partial window finalization: returns False if empty or observations below quality threshold."""
+        incoming = [{"node_id": "A", "embedding": unit(0).tolist(), "quality": 0.90}]
+        bank: list[dict] = []
+        window: list[dict] = []
+        self.assertFalse(finalize_partial_temporal_window(incoming, window, bank))
+        self.assertEqual(len(bank), 0)
+
+        window_low = [
+            {"embedding": unit(0), "quality": 0.69, "frame_index": 12},
+            {"embedding": unit(0), "quality": 0.50, "frame_index": 15},
+        ]
+        self.assertFalse(finalize_partial_temporal_window(incoming, window_low, bank))
+        self.assertEqual(len(bank), 0)
 
 
 if __name__ == "__main__":

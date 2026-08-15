@@ -82,6 +82,10 @@ ANOMALY_DELAY_SECONDS = 2.0
 TRACK_LOST_GRACE_FRAMES = 20
 
 LOG_DIR = ROOT / "logs"
+REVISIT_RUN_ID = os.getenv(
+    "REVISIT_RUN_ID", datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
+)
+REVISIT_LOG = LOG_DIR / "revisit" / REVISIT_RUN_ID / "camera_c_revisit.jsonl"
 CANDIDATE_CSV = LOG_DIR / "node_c_candidates.csv"
 MATCH_CSV = LOG_DIR / "node_c_matches.csv"
 PASSAGE_CSV = LOG_DIR / "node_c_passages.csv"
@@ -90,7 +94,9 @@ PASSAGE_DIAGNOSTICS_JSONL = LOG_DIR / "node_c_passage_diagnostics.jsonl"
 latest_jpeg: bytes | None = None
 frame_lock = threading.Lock()
 candidate_lock = threading.Lock()
+revisit_log_lock = threading.Lock()
 candidates: dict[str, dict[str, Any]] = {}
+pending_passage_pubacks: dict[int, dict[str, Any]] = {}
 
 
 def embedding_to_list(embedding: np.ndarray | list[float]) -> list[float]:
@@ -414,6 +420,33 @@ def append_jsonl(path: Path, value: dict[str, Any]) -> None:
         file.write("\n")
 
 
+def log_revisit_event(
+    event: str,
+    *,
+    request_id: str | None = None,
+    journey_id: str | None = None,
+    person_uid: str | None = None,
+    local_track_id: int | None = None,
+    **fields: Any,
+) -> None:
+    record = {
+        "at": now_iso(),
+        "run_id": REVISIT_RUN_ID,
+        "event": event,
+        "node": "C",
+        "request_id": request_id,
+        "journey_id": journey_id,
+        "person_uid": person_uid,
+        "local_track_id": local_track_id,
+        **fields,
+    }
+    with revisit_log_lock:
+        REVISIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with REVISIT_LOG.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+            file.write("\n")
+
+
 def save_candidate(payload: dict[str, Any]) -> None:
     """
     Main Server가 C에 전달한 CANDIDATE 메시지를 저장한다.
@@ -428,8 +461,37 @@ def save_candidate(payload: dict[str, Any]) -> None:
 
     journey_id = payload.get("journey_id")
     person_uid = payload.get("person_uid", "")
+    request_id = payload.get("request_id")
     stage = payload.get("stage")
     gallery = payload.get("gallery", [])
+
+    sample_metadata: list[dict[str, Any]] = []
+    if isinstance(gallery, list):
+        for item in gallery:
+            embedding = item.get("embedding") if isinstance(item, dict) else None
+            embedding_dim = len(embedding) if isinstance(embedding, list) else None
+            norm: float | None = None
+            if isinstance(embedding, list):
+                try:
+                    array = np.asarray(embedding, dtype=np.float32)
+                    if np.all(np.isfinite(array)):
+                        norm = float(np.linalg.norm(array))
+                except (TypeError, ValueError):
+                    pass
+            sample_metadata.append({
+                "embedding_dim": embedding_dim,
+                "norm": norm,
+                "quality": item.get("quality") if isinstance(item, dict) else None,
+            })
+    log_revisit_event(
+        "C_CANDIDATE_RECEIVED",
+        request_id=request_id,
+        journey_id=journey_id,
+        person_uid=person_uid or None,
+        gallery_count=len(gallery) if isinstance(gallery, list) else 0,
+        embedding_dim=(sample_metadata[0]["embedding_dim"] if sample_metadata else None),
+        samples=sample_metadata,
+    )
 
     if (
         payload.get("event") != "CANDIDATE"
@@ -439,6 +501,14 @@ def save_candidate(payload: dict[str, Any]) -> None:
         or not isinstance(gallery, list)
         or not gallery
     ):
+        log_revisit_event(
+            "C_CANDIDATE_ACTIVATED",
+            request_id=request_id,
+            journey_id=journey_id,
+            person_uid=person_uid or None,
+            activated=False,
+            reason="INVALID_CANDIDATE_PAYLOAD",
+        )
         print("[C MQTT] 잘못된 Main 후보 메시지")
         return
 
@@ -457,6 +527,15 @@ def save_candidate(payload: dict[str, Any]) -> None:
             validated_gallery.append(normalized_item)
             gallery_embeddings.append(normalized)
     except (TypeError, ValueError) as error:
+        log_revisit_event(
+            "C_CANDIDATE_ACTIVATED",
+            request_id=request_id,
+            journey_id=journey_id,
+            person_uid=person_uid,
+            activated=False,
+            reason="INVALID_GALLERY",
+            detail=str(error),
+        )
         print(
             f"[C MQTT] {journey_id}: {error}"
         )
@@ -472,6 +551,7 @@ def save_candidate(payload: dict[str, Any]) -> None:
 
     candidate = {
         "journey_id": journey_id,
+        "request_id": request_id,
         "person_uid": person_uid,
         "person_status": payload.get("person_status", "UNKNOWN"),
         "visit_count": payload.get("visit_count"),
@@ -511,6 +591,14 @@ def save_candidate(payload: dict[str, Any]) -> None:
                 "PASSED",
             }
         ):
+            log_revisit_event(
+                "C_CANDIDATE_ACTIVATED",
+                request_id=request_id,
+                journey_id=journey_id,
+                person_uid=person_uid,
+                activated=False,
+                reason="DUPLICATE_ACTIVE_CANDIDATE",
+            )
             print(
                 f"[C 중복 후보 무시] "
                 f"{journey_id}"
@@ -518,6 +606,15 @@ def save_candidate(payload: dict[str, Any]) -> None:
             return
 
         candidates[journey_id] = candidate
+
+    log_revisit_event(
+        "C_CANDIDATE_ACTIVATED",
+        request_id=request_id,
+        journey_id=journey_id,
+        person_uid=person_uid,
+        activated=True,
+        reason="REGISTERED",
+    )
 
     append_csv(
         CANDIDATE_CSV,
@@ -573,6 +670,7 @@ def candidate_reference(journey_id: str) -> dict[str, Any] | None:
             return None
         return {
             "journey_id": item["journey_id"],
+            "request_id": item.get("request_id"),
             "person_uid": item["person_uid"],
             "person_status": item.get("person_status", "UNKNOWN"),
             "visit_count": item.get("visit_count"),
@@ -608,13 +706,26 @@ def mark_passed(journey_id: str) -> None:
 
 
 def mark_track_rejected(journey_id: str, local_id: int, reason: str) -> None:
+    request_id: str | None = None
+    person_uid: str | None = None
     with candidate_lock:
         item = candidates.get(journey_id)
         if item is None or item.get("matched_c_local_id") not in {None, local_id}:
             return
+        request_id = item.get("request_id")
+        person_uid = item.get("person_uid")
         item["status"] = reason
         item["matched_c_local_id"] = None
         item["match_score"] = None
+    log_revisit_event(
+        "C_TRACK_CLEANUP",
+        request_id=request_id,
+        journey_id=journey_id,
+        person_uid=person_uid,
+        local_track_id=local_id,
+        reason="TRACK_LOST",
+        final_status=reason,
+    )
     print("\n===== C Track 최종 판정 =====")
     print(f"Journey ID: {journey_id}")
     print(f"C Local ID: {local_id}")
@@ -623,10 +734,15 @@ def mark_track_rejected(journey_id: str, local_id: int, reason: str) -> None:
 
 
 def release_candidate(journey_id: str, local_id: int, reason: str) -> None:
+    request_id: str | None = None
+    person_uid: str | None = None
+    final_status = "UNKNOWN"
     with candidate_lock:
         item = candidates.get(journey_id)
         if item is None:
             return
+        request_id = item.get("request_id")
+        person_uid = item.get("person_uid")
         if item.get("matched_c_local_id") not in {None, local_id}:
             return
 
@@ -641,6 +757,17 @@ def release_candidate(journey_id: str, local_id: int, reason: str) -> None:
         item["matched_c_local_id"] = None
         if not passed:
             item["match_score"] = None
+        final_status = item["status"]
+
+    log_revisit_event(
+        "C_TRACK_CLEANUP",
+        request_id=request_id,
+        journey_id=journey_id,
+        person_uid=person_uid,
+        local_track_id=local_id,
+        reason=reason,
+        final_status=final_status,
+    )
 
     print("\n===== C Global ID 연결 정리 =====")
     print(f"Journey ID: {journey_id}")
@@ -712,6 +839,8 @@ def add_temporal_candidate(
     """Add an observation and finalize one non-overlapping temporal window."""
     if quality < C_PASSAGE_MIN_QUALITY:
         return False
+    if any(item["frame_index"] == frame_index for item in window):
+        return False
     window.append({
         "embedding": normalize(embedding).copy(),
         "quality": float(quality),
@@ -766,6 +895,88 @@ def temporal_candidate_diagnostics(
     return calculate_gallery_diagnostics(gallery)
 
 
+def finalize_partial_temporal_window(
+    incoming_gallery: list[dict[str, Any]],
+    window: list[dict[str, Any]],
+    candidate_bank: list[dict[str, Any]],
+) -> bool:
+    """Finalize remaining valid observations in temporal window into a candidate."""
+    valid_observations = [
+        item for item in window
+        if float(item.get("quality", 0.0)) >= C_PASSAGE_MIN_QUALITY
+    ]
+    window.clear()
+    if not valid_observations:
+        return False
+    mean_embedding = normalize(np.mean(np.stack([
+        item["embedding"] for item in valid_observations
+    ]), axis=0))
+    mean_quality = float(np.mean([item["quality"] for item in valid_observations]))
+    best_score = max(
+        similarity(mean_embedding, normalize(item["embedding"]))
+        for item in incoming_gallery
+    )
+    candidate_bank.append({
+        "embedding": mean_embedding,
+        "quality": mean_quality,
+        "best_score": float(best_score),
+        "frame_index": valid_observations[-1]["frame_index"],
+        "window_start_frame": valid_observations[0]["frame_index"],
+        "window_end_frame": valid_observations[-1]["frame_index"],
+        "gallery_selected": True,
+    })
+    candidate_bank.sort(key=lambda item: item["best_score"], reverse=True)
+    del candidate_bank[TEMPORAL_CANDIDATE_BANK_MAX:]
+    return True
+
+
+def promote_confirmation_observations(
+    candidate_id: str,
+    incoming_gallery: list[dict[str, Any]],
+    confirmation_seeds: list[dict[str, Any]],
+    temporal_window: list[dict[str, Any]],
+    temporal_candidate_bank: list[dict[str, Any]],
+    observed_samples: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Promote high-quality confirmation observations matching candidate_id as seed evidence."""
+    promoted: list[dict[str, Any]] = []
+    any_completed = False
+    seen_frame_indices: set[int] = set()
+    for seed in confirmation_seeds:
+        frame_index = int(seed.get("frame_index", -1))
+        if (
+            seed.get("candidate_id") != candidate_id
+            or float(seed.get("quality", 0.0)) < C_PASSAGE_MIN_QUALITY
+            or frame_index < 0
+            or frame_index in seen_frame_indices
+        ):
+            continue
+        seen_frame_indices.add(frame_index)
+        embedding = seed["embedding"]
+        quality = float(seed["quality"])
+        frame_index = int(seed["frame_index"])
+        observed_sample = make_reid_sample(
+            embedding,
+            incoming_gallery,
+            quality,
+            frame_index,
+            False,
+        )
+        observed_samples.append(observed_sample)
+        completed = add_temporal_candidate(
+            embedding,
+            quality,
+            frame_index,
+            incoming_gallery,
+            temporal_window,
+            temporal_candidate_bank,
+        )
+        if completed:
+            any_completed = True
+        promoted.append(seed)
+    return promoted, any_completed
+
+
 def publish_passage(
     client: mqtt.Client,
     local_id: int,
@@ -781,11 +992,36 @@ def publish_passage(
 ) -> bool:
     reference = candidate_reference(journey_id)
     if reference is None:
+        log_revisit_event(
+            "C_PASSAGE_DECISION",
+            journey_id=journey_id,
+            local_track_id=local_id,
+            status="FAILED",
+            reason="REFERENCE_NOT_FOUND",
+            valid_samples=0,
+            qualities=[],
+        )
         print(f"[C PASSAGE 실패] {journey_id}: A 후보 정보 없음")
         return False
 
     person_uid = str(reference.get("person_uid") or "UNKNOWN")
+    request_id = reference.get("request_id")
     passage_at = now_iso()
+
+    if len(gallery) < PASSAGE_MIN_REID_SAMPLES or len(selected_wire_samples) < PASSAGE_MIN_REID_SAMPLES:
+        selected_qualities = [float(sample.get("quality", 0.0)) for sample in selected_wire_samples]
+        log_revisit_event(
+            "C_PASSAGE_DECISION",
+            request_id=request_id,
+            journey_id=journey_id,
+            person_uid=person_uid,
+            local_track_id=local_id,
+            status="REJECTED" if rejection_is_final else "COLLECTING",
+            reason="INSUFFICIENT_QUALITY",
+            valid_samples=len(selected_qualities),
+            qualities=selected_qualities,
+        )
+        return False
 
     payload = build_passage_payload(
         journey_id=journey_id,
@@ -800,7 +1036,23 @@ def publish_passage(
     )
 
     accepted, reason, diagnostics = validate_c_passage_evidence(payload["gallery"])
+    selected_qualities = [
+        float(item["quality"])
+        for item in payload["gallery"]
+        if item.get("node_id") == "C"
+    ]
     if not accepted:
+        log_revisit_event(
+            "C_PASSAGE_DECISION",
+            request_id=request_id,
+            journey_id=journey_id,
+            person_uid=person_uid,
+            local_track_id=local_id,
+            status="REJECTED" if rejection_is_final else "COLLECTING",
+            reason=reason,
+            valid_samples=len(selected_qualities),
+            qualities=selected_qualities,
+        )
         if rejection_is_final:
             append_jsonl(PASSAGE_DIAGNOSTICS_JSONL, {
                 "logged_at": now_iso(), "topic": PASSAGE_TOPIC,
@@ -834,6 +1086,17 @@ def publish_passage(
 
     wire_ok, wire_payload, mismatches = verify_wire_payload(payload)
     if not wire_ok:
+        log_revisit_event(
+            "C_PASSAGE_DECISION",
+            request_id=request_id,
+            journey_id=journey_id,
+            person_uid=person_uid,
+            local_track_id=local_id,
+            status="FAILED",
+            reason="LOCAL_WIRE_SCORE_MISMATCH",
+            valid_samples=len(selected_qualities),
+            qualities=selected_qualities,
+        )
         append_jsonl(PASSAGE_DIAGNOSTICS_JSONL, {
             "logged_at": now_iso(), "topic": PASSAGE_TOPIC,
             "journey_id": journey_id,
@@ -849,11 +1112,18 @@ def publish_passage(
         return False
     payload = wire_payload
 
-    selected_qualities = [
-        float(item["quality"])
-        for item in payload["gallery"]
-        if item.get("node_id") == "C"
-    ]
+    log_revisit_event(
+        "C_PASSAGE_DECISION",
+        request_id=request_id,
+        journey_id=journey_id,
+        person_uid=person_uid,
+        local_track_id=local_id,
+        status="PASSED",
+        reason="ACCEPTED",
+        valid_samples=len(selected_qualities),
+        qualities=selected_qualities,
+    )
+
     print(
         "[C PASSAGE 발행 직전] "
         f"journey_id={journey_id}, valid_samples={len(selected_qualities)}, "
@@ -877,6 +1147,24 @@ def publish_passage(
         qos=MQTT_QOS,
         retain=False,
     )
+    rc = int(info.rc)
+    mid = int(info.mid)
+    publish_context = {
+        "request_id": request_id,
+        "journey_id": journey_id,
+        "person_uid": person_uid,
+        "local_track_id": local_id,
+        "topic": PASSAGE_TOPIC,
+        "rc": rc,
+    }
+    log_revisit_event(
+        "C_PASSAGE_PUBLISH",
+        **publish_context,
+        mid=mid,
+        puback=False,
+    )
+    if rc == mqtt.MQTT_ERR_SUCCESS:
+        pending_passage_pubacks[mid] = publish_context
     if info.rc != mqtt.MQTT_ERR_SUCCESS:
         print(f"[C PASSAGE 실패] MQTT rc={info.rc}")
         return False
@@ -943,6 +1231,23 @@ def on_message(client, userdata, message) -> None:
         save_candidate(payload)
 
 
+def on_publish(client, userdata, mid, reason_code, properties) -> None:
+    context = pending_passage_pubacks.pop(int(mid), {})
+    puback_reason = getattr(reason_code, "value", reason_code)
+    log_revisit_event(
+        "C_PASSAGE_PUBLISH",
+        request_id=context.get("request_id"),
+        journey_id=context.get("journey_id"),
+        person_uid=context.get("person_uid"),
+        local_track_id=context.get("local_track_id"),
+        topic=context.get("topic", PASSAGE_TOPIC),
+        rc=context.get("rc"),
+        mid=int(mid),
+        puback=True,
+        puback_reason=int(puback_reason),
+    )
+
+
 def create_mqtt_client() -> mqtt.Client:
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
@@ -950,6 +1255,7 @@ def create_mqtt_client() -> mqtt.Client:
     )
     client.on_connect = on_connect
     client.on_message = on_message
+    client.on_publish = on_publish
     client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
     client.loop_start()
     return client
@@ -1170,6 +1476,7 @@ def main() -> None:
 
     tentative_id: dict[int, str] = {}
     tentative_count: dict[int, int] = {}
+    tentative_observations: dict[int, list[dict[str, Any]]] = {}
     best_scores: dict[int, float] = {}
 
     global_ids: dict[int, str] = {}
@@ -1261,7 +1568,13 @@ def main() -> None:
                 confs = result.boxes.conf.cpu().tolist()
 
                 for local_id, box, confidence in zip(local_ids, boxes, confs):
-                    first_seen.setdefault(local_id, time.time())
+                    if local_id not in first_seen:
+                        first_seen[local_id] = time.time()
+                        log_revisit_event(
+                            "C_TRACK_DETECTED",
+                            local_track_id=local_id,
+                            first_observed_at=now_iso(),
+                        )
                     last_seen[local_id] = frame_index
                     x1, y1, x2, y2 = box
 
@@ -1341,6 +1654,28 @@ def main() -> None:
                                                     reference["incoming_gallery"], selected
                                                 )
                                                 if diagnostics is not None:
+                                                    log_revisit_event(
+                                                        "C_MATCH_WINDOW",
+                                                        request_id=reference.get("request_id"),
+                                                        journey_id=journey_id,
+                                                        person_uid=reference.get("person_uid"),
+                                                        local_track_id=local_id,
+                                                        best=diagnostics["best_score"],
+                                                        topk=diagnostics["topk_score"],
+                                                        combined=diagnostics["combined_score"],
+                                                        consistent_windows=diagnostics[
+                                                            "consistency_count"
+                                                        ],
+                                                        thresholds={
+                                                            "quality": C_PASSAGE_MIN_QUALITY,
+                                                            "best": PASSAGE_MIN_BEST_SCORE,
+                                                            "topk": PASSAGE_MIN_TOPK_SCORE,
+                                                            "combined": PASSAGE_MIN_COMBINED_SCORE,
+                                                            "consistent_windows": (
+                                                                PASSAGE_MIN_CONSISTENT_COUNT
+                                                            ),
+                                                        },
+                                                    )
                                                     scores = (
                                                         diagnostics["best_score"],
                                                         diagnostics["topk_score"],
@@ -1435,6 +1770,7 @@ def main() -> None:
                                             verify_successes.pop(local_id, None)
                                             tentative_id.pop(local_id, None)
                                             tentative_count.pop(local_id, None)
+                                            tentative_observations.pop(local_id, None)
                                             best_scores.pop(local_id, None)
                                             galleries.pop(local_id, None)
                                             observed_samples.pop(local_id, None)
@@ -1473,6 +1809,21 @@ def main() -> None:
                                     else:
                                         tentative_id[local_id] = candidate_id
                                         tentative_count[local_id] = 1
+                                        tentative_observations[local_id] = []
+
+                                    quality_ok, quality = crop_quality(
+                                        box, float(confidence),
+                                        frame_width, frame_height
+                                    )
+                                    if quality_ok and quality >= C_PASSAGE_MIN_QUALITY:
+                                        tentative_observations.setdefault(local_id, []).append({
+                                            "embedding": current_embedding.copy(),
+                                            "quality": float(quality),
+                                            "frame_index": int(frame_index),
+                                            "crop": current_crop.copy(),
+                                            "candidate_id": str(candidate_id),
+                                            "score": float(score),
+                                        })
 
                                     if (
                                         tentative_count[local_id]
@@ -1493,48 +1844,86 @@ def main() -> None:
                                             last_collection_scores.pop(local_id, None)
                                             last_gallery_frame.pop(local_id, None)
 
-                                            quality_ok, quality = crop_quality(
-                                                box, float(confidence),
-                                                frame_width, frame_height
+                                            matched_reference = candidate_reference(
+                                                candidate_id
                                             )
-                                            if quality_ok:
-                                                matched_reference = candidate_reference(
-                                                    candidate_id
+                                            if matched_reference is None:
+                                                raise RuntimeError(
+                                                    "매칭 직후 candidate reference가 없습니다."
                                                 )
-                                                if matched_reference is None:
-                                                    raise RuntimeError(
-                                                        "매칭 직후 candidate reference가 없습니다."
+
+                                            raw_seeds = tentative_observations.pop(local_id, [])
+                                            promoted_seeds, any_completed = promote_confirmation_observations(
+                                                candidate_id,
+                                                matched_reference["incoming_gallery"],
+                                                raw_seeds,
+                                                temporal_windows[local_id],
+                                                temporal_candidate_banks[local_id],
+                                                observed_samples[local_id],
+                                            )
+
+                                            for seed in promoted_seeds:
+                                                seed_crop = seed.get("crop")
+                                                seed_quality = float(seed.get("quality", 0.0))
+                                                if seed_crop is not None and seed_quality >= C_PASSAGE_MIN_QUALITY:
+                                                    prev_q = best_capture_quality_by_local_id.get(
+                                                        local_id, -1.0
                                                     )
-                                                observed_sample = make_reid_sample(
-                                                    current_embedding,
-                                                    matched_reference[
-                                                        "incoming_gallery"
-                                                    ],
-                                                    quality,
-                                                    frame_index,
-                                                    False,
+                                                    if seed_quality > prev_q:
+                                                        best_capture_by_local_id[
+                                                            local_id
+                                                        ] = seed_crop.copy()
+                                                        best_capture_quality_by_local_id[
+                                                            local_id
+                                                        ] = seed_quality
+
+                                            if any_completed:
+                                                selected = selected_temporal_candidates(
+                                                    temporal_candidate_banks[local_id]
                                                 )
-                                                observed_samples[local_id].append(
-                                                    observed_sample
-                                                )
-                                                del observed_samples[local_id][
-                                                    :-OBSERVED_SAMPLE_HISTORY_MAX
+                                                galleries[local_id] = [
+                                                    item["embedding"] for item in selected
                                                 ]
-                                                add_temporal_candidate(
-                                                    current_embedding,
-                                                    quality,
-                                                    frame_index,
+                                                selected_wire_samples[local_id] = selected
+                                                diagnostics = temporal_candidate_diagnostics(
                                                     matched_reference["incoming_gallery"],
-                                                    temporal_windows[local_id],
-                                                    temporal_candidate_banks[local_id],
+                                                    selected,
                                                 )
-                                                if quality >= C_PASSAGE_MIN_QUALITY:
-                                                    best_capture_by_local_id[
-                                                        local_id
-                                                    ] = current_crop.copy()
-                                                    best_capture_quality_by_local_id[
-                                                        local_id
-                                                    ] = quality
+                                                if diagnostics is not None:
+                                                    log_revisit_event(
+                                                        "C_MATCH_WINDOW",
+                                                        request_id=matched_reference.get(
+                                                            "request_id"
+                                                        ),
+                                                        journey_id=candidate_id,
+                                                        person_uid=matched_reference.get(
+                                                            "person_uid"
+                                                        ),
+                                                        local_track_id=local_id,
+                                                        best=diagnostics["best_score"],
+                                                        topk=diagnostics["topk_score"],
+                                                        combined=diagnostics[
+                                                            "combined_score"
+                                                        ],
+                                                        consistent_windows=diagnostics[
+                                                            "consistency_count"
+                                                        ],
+                                                        thresholds={
+                                                            "quality": C_PASSAGE_MIN_QUALITY,
+                                                            "best": PASSAGE_MIN_BEST_SCORE,
+                                                            "topk": PASSAGE_MIN_TOPK_SCORE,
+                                                            "combined": (
+                                                                PASSAGE_MIN_COMBINED_SCORE
+                                                            ),
+                                                            "consistent_windows": (
+                                                                PASSAGE_MIN_CONSISTENT_COUNT
+                                                            ),
+                                                        },
+                                                    )
+
+                                            del observed_samples[local_id][
+                                                :-OBSERVED_SAMPLE_HISTORY_MAX
+                                            ]
 
                                             append_csv(
                                                 MATCH_CSV,
@@ -1546,9 +1935,6 @@ def main() -> None:
                                                     "MATCHED",
                                                 ],
                                             )
-                                            matched_reference = (
-                                                candidate_reference(candidate_id)
-                                            )
                                             matched_person_uid = (
                                                 matched_reference.get("person_uid")
                                                 if matched_reference
@@ -1559,14 +1945,17 @@ def main() -> None:
                                             print(f"C Local ID : {local_id}")
                                             print(f"Journey ID : {candidate_id}")
                                             print(f"Similarity : {score:.6f}")
+                                            print(f"Seeds Reused: {len(promoted_seeds)}")
                                             print("Gallery 수집 시작")
                                             print("=============================")
 
                                         tentative_id.pop(local_id, None)
                                         tentative_count.pop(local_id, None)
+                                        tentative_observations.pop(local_id, None)
                                 else:
                                     tentative_id.pop(local_id, None)
                                     tentative_count.pop(local_id, None)
+                                    tentative_observations.pop(local_id, None)
 
                         except Exception as error:
                             print(f"[C Re-ID 오류] Local={local_id}: {error}")
@@ -1653,13 +2042,35 @@ def main() -> None:
                     if local_id in published_local_ids:
                         release_candidate(journey_id, local_id, "TRACK_LOST")
                     else:
+                        reference = candidate_reference(journey_id)
+                        if (
+                            reference is not None
+                            and len(selected_wire_samples.get(local_id, []))
+                            < C_GALLERY_TARGET
+                            and local_id in temporal_windows
+                        ):
+                            if finalize_partial_temporal_window(
+                                reference["incoming_gallery"],
+                                temporal_windows[local_id],
+                                temporal_candidate_banks.setdefault(local_id, []),
+                            ):
+                                selected = selected_temporal_candidates(
+                                    temporal_candidate_banks[local_id]
+                                )
+                                galleries[local_id] = [
+                                    item["embedding"] for item in selected
+                                ]
+                                selected_wire_samples[local_id] = selected
+
                         final_published = False
+                        final_validation_attempted = False
                         if (
                             mqtt_client is not None
                             and len(selected_wire_samples.get(local_id, []))
                             >= C_GALLERY_TARGET
                             and local_id in best_capture_by_local_id
                         ):
+                            final_validation_attempted = True
                             final_published = publish_passage(
                                 mqtt_client,
                                 local_id,
@@ -1682,11 +2093,36 @@ def main() -> None:
                                 >= C_GALLERY_TARGET
                                 else "INSUFFICIENT_QUALITY"
                             )
+                            if not final_validation_attempted:
+                                reference = candidate_reference(journey_id)
+                                final_qualities = [
+                                    float(item["quality"])
+                                    for item in selected_wire_samples.get(local_id, [])
+                                ]
+                                log_revisit_event(
+                                    "C_PASSAGE_DECISION",
+                                    request_id=(reference or {}).get("request_id"),
+                                    journey_id=journey_id,
+                                    person_uid=(reference or {}).get("person_uid"),
+                                    local_track_id=local_id,
+                                    status="REJECTED",
+                                    reason=final_status,
+                                    valid_samples=len(final_qualities),
+                                    qualities=final_qualities,
+                                )
                             mark_track_rejected(journey_id, local_id, final_status)
+                else:
+                    log_revisit_event(
+                        "C_TRACK_CLEANUP",
+                        local_track_id=local_id,
+                        reason="TRACK_LOST",
+                        final_status="UNMATCHED",
+                    )
 
                 for mapping in (
                     first_seen, last_seen, histories, tentative_id,
-                    tentative_count, best_scores, global_ids, verify_scores,
+                    tentative_count, tentative_observations, best_scores,
+                    global_ids, verify_scores,
                     verify_failures, verify_successes, galleries,
                     observed_samples, selected_wire_samples,
                     temporal_windows, temporal_candidate_banks,
