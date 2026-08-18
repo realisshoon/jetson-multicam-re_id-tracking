@@ -1,0 +1,22 @@
+# Camera A direct Python dependencies
+# Audited on 2026-08-18 with Python 3.10.12.
+# The complete comparison snapshot is snapshots/camera-a.freeze.txt.
+
+# Imported directly by Camera A or its project modules.
+numpy==1.26.4
+opencv-python==4.11.0.86
+paho-mqtt==2.1.0
+PyYAML==6.0.2
+ultralytics==8.4.112
+
+# Runtime backend selected by tracker="bytetrack.yaml".
+lap==0.5.12
+
+# Jetson platform packages: do not install generic PyPI builds from this file.
+# Provision versions compatible with the target JetPack image, then verify them
+# with docs/ENVIRONMENT.md. Versions found in the Camera A runtime were:
+#   torch==2.8.0 (CUDA 12.6; installation provenance was not retained)
+#   torchvision==0.23.0 (Ultralytics transitive/runtime companion)
+#   tensorrt==10.3.0 (provided by JetPack/apt Python bindings)
+# CUDA, cuDNN, JetPack, Mosquitto, and SQLite are system dependencies and are
+# intentionally not pip requirements.

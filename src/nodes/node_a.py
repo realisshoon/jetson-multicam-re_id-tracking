@@ -91,11 +91,16 @@ DASHBOARD_HEIGHT = 175
 
 
 # ============================================================
-# ENTRY LINE
+# ENTRY ZONE
 # ============================================================
 
-ENTRY_LINE_X_RATIO = 0.40
-ENTRY_DIRECTION = "right"  # right 또는 left
+# 화면 오른쪽 영역을 ENTRY 대기 구역으로 사용한다.
+# 사람 중심점이 이 영역 안에 한 번 들어온 뒤,
+# 왼쪽 경계 밖으로 빠져나오면 ENTRY를 발생시킨다.
+ENTRY_ZONE_X1_RATIO = 0.65
+ENTRY_ZONE_X2_RATIO = 1.00
+ENTRY_ZONE_Y1_RATIO = 0.00
+ENTRY_ZONE_Y2_RATIO = 0.62
 
 
 # ============================================================
@@ -2645,20 +2650,49 @@ def extract_person_crop(
     return crop.copy()
 
 
-def crossed_entry_line(
-    previous_x: int,
-    current_x: int,
-    line_x: int,
+def point_in_entry_zone(
+    center_x: int,
+    center_y: int,
+    zone_x1: int,
+    zone_y1: int,
+    zone_x2: int,
+    zone_y2: int,
 ) -> bool:
-    if ENTRY_DIRECTION == "right":
-        return previous_x < line_x <= current_x
-
-    if ENTRY_DIRECTION == "left":
-        return previous_x > line_x >= current_x
-
-    raise ValueError(
-        "ENTRY_DIRECTION은 'right' 또는 'left'여야 합니다."
+    """
+    사람 Bounding Box 중심점이 ENTRY ZONE 내부에 있는지 확인한다.
+    """
+    return (
+        zone_x1 <= center_x <= zone_x2
+        and zone_y1 <= center_y <= zone_y2
     )
+
+
+def exited_entry_zone(
+    previous_x: int,
+    previous_y: int,
+    current_x: int,
+    current_y: int,
+    zone_x1: int,
+    zone_y2: int,
+) -> str | None:
+    """
+    ENTRY ZONE을 왼쪽 또는 아래쪽으로 빠져나왔는지 확인한다.
+
+    반환:
+    - "LEFT"   : 왼쪽 경계 이탈
+    - "BOTTOM" : 아래쪽 경계 이탈
+    - None     : ENTRY 이탈 아님
+
+    ENTRY ZONE에 실제로 들어온 적이 있는지는
+    entry_zone_armed_by_local_id에서 별도로 검증한다.
+    """
+    if previous_x >= zone_x1 > current_x:
+        return "LEFT"
+
+    if previous_y <= zone_y2 < current_y:
+        return "BOTTOM"
+
+    return None
 
 
 # ============================================================
@@ -2667,57 +2701,90 @@ def crossed_entry_line(
 
 def draw_entry_guide(
     frame: np.ndarray,
-    line_x: int,
+    zone_x1: int,
+    zone_y1: int,
+    zone_x2: int,
+    zone_y2: int,
     frame_width: int,
     frame_height: int,
 ) -> None:
     """
-    Camera A ENTRY 가이드 UI.
+    Camera A ENTRY ZONE 가이드 UI.
 
-    목표:
-    - 하단 Dashboard 없이 카메라 화면만 표시
-    - ENTRY 선은 기존보다 굵고 눈에 잘 띄게 표시
-    - 과한 문구/영역 색칠 없이 관제 화면 느낌의 최소 UI 유지
-    - 좌측 상단 LIVE / CAM A 표시
+    동작 의미:
+    - 화면 오른쪽 빨간 영역 = ENTRY ZONE
+    - 사람 중심점이 ZONE 안에 한 번 들어오면 ARMED
+    - 이후 ZONE의 왼쪽 또는 아래쪽 경계 밖으로 빠져나오면 ENTRY
+
+    화면 표시는 기존 LIVE / CAM A 스타일을 유지하면서
+    ENTRY ZONE 테두리와 왼쪽 EXIT 방향만 보여준다.
     """
 
     # OpenCV BGR
-    line_color = (255, 210, 70)
+    zone_color = (255, 210, 70)
     text_color = (245, 248, 250)
     muted_color = (185, 195, 205)
     panel_color = (16, 20, 26)
     live_color = (90, 90, 255)
 
     # ---------------------------------------------------------
-    # 1. ENTRY LINE GLOW
+    # 1. ENTRY ZONE
     # ---------------------------------------------------------
-    glow = frame.copy()
+    zone_overlay = frame.copy()
 
-    cv2.line(
-        glow,
-        (line_x, 0),
-        (line_x, frame_height),
-        line_color,
-        12,
-        cv2.LINE_AA,
+    # 아주 약한 영역 표시
+    cv2.rectangle(
+        zone_overlay,
+        (zone_x1, zone_y1),
+        (zone_x2, zone_y2),
+        zone_color,
+        -1,
     )
-
     cv2.addWeighted(
-        glow,
-        0.12,
+        zone_overlay,
+        0.035,
         frame,
-        0.88,
+        0.965,
         0,
         frame,
     )
 
-    # 실제 ENTRY 선: 기존 2px -> 4px
+    # 테두리 glow
+    glow = frame.copy()
+    cv2.rectangle(
+        glow,
+        (zone_x1, zone_y1),
+        (zone_x2, zone_y2),
+        zone_color,
+        12,
+        cv2.LINE_AA,
+    )
+    cv2.addWeighted(
+        glow,
+        0.10,
+        frame,
+        0.90,
+        0,
+        frame,
+    )
+
+    # 실제 ZONE 테두리
+    cv2.rectangle(
+        frame,
+        (zone_x1, zone_y1),
+        (zone_x2, zone_y2),
+        zone_color,
+        4,
+        cv2.LINE_AA,
+    )
+
+    # ENTRY 발생 경계인 왼쪽 선은 한 번 더 강조
     cv2.line(
         frame,
-        (line_x, 0),
-        (line_x, frame_height),
-        line_color,
-        4,
+        (zone_x1, zone_y1),
+        (zone_x1, zone_y2),
+        zone_color,
+        5,
         cv2.LINE_AA,
     )
 
@@ -2739,7 +2806,6 @@ def draw_entry_guide(
         panel_color,
         -1,
     )
-
     cv2.addWeighted(
         hud_overlay,
         0.72,
@@ -2749,7 +2815,6 @@ def draw_entry_guide(
         frame,
     )
 
-    # LIVE indicator
     cv2.circle(
         frame,
         (hud_x1 + 16, hud_y1 + 18),
@@ -2758,7 +2823,6 @@ def draw_entry_guide(
         -1,
         cv2.LINE_AA,
     )
-
     cv2.putText(
         frame,
         "LIVE",
@@ -2769,7 +2833,6 @@ def draw_entry_guide(
         1,
         cv2.LINE_AA,
     )
-
     cv2.putText(
         frame,
         "CAM A",
@@ -2782,10 +2845,10 @@ def draw_entry_guide(
     )
 
     # ---------------------------------------------------------
-    # 3. ENTRY 라벨
+    # 3. ENTRY ZONE 라벨
     # ---------------------------------------------------------
-    label_text = "ENTRY"
-    font_scale = 0.62
+    label_text = "ENTRY ZONE"
+    font_scale = 0.56
     thickness = 1
 
     (label_w, label_h), _ = cv2.getTextSize(
@@ -2795,19 +2858,15 @@ def draw_entry_guide(
         thickness,
     )
 
-    label_x1 = max(
-        12,
-        min(
-            frame_width - label_w - 34,
-            line_x - label_w // 2 - 16,
-        ),
+    label_x1 = min(
+        max(zone_x1 + 14, 190),
+        max(12, frame_width - label_w - 46),
     )
     label_y1 = 18
-    label_x2 = label_x1 + label_w + 32
+    label_x2 = label_x1 + label_w + 28
     label_y2 = label_y1 + label_h + 22
 
     label_overlay = frame.copy()
-
     cv2.rectangle(
         label_overlay,
         (label_x1, label_y1),
@@ -2815,7 +2874,6 @@ def draw_entry_guide(
         panel_color,
         -1,
     )
-
     cv2.addWeighted(
         label_overlay,
         0.72,
@@ -2824,21 +2882,18 @@ def draw_entry_guide(
         0,
         frame,
     )
-
-    # ENTRY 라벨 아래에 작은 강조선
     cv2.line(
         frame,
-        (label_x1 + 10, label_y2 - 4),
-        (label_x2 - 10, label_y2 - 4),
-        line_color,
+        (label_x1 + 9, label_y2 - 4),
+        (label_x2 - 9, label_y2 - 4),
+        zone_color,
         2,
         cv2.LINE_AA,
     )
-
     cv2.putText(
         frame,
         label_text,
-        (label_x1 + 16, label_y2 - 11),
+        (label_x1 + 14, label_y2 - 11),
         font,
         font_scale,
         text_color,
@@ -2847,60 +2902,22 @@ def draw_entry_guide(
     )
 
     # ---------------------------------------------------------
-    # 4. ENTRY 방향 표시
+    # 4. 왼쪽으로 ZONE을 빠져나오면 ENTRY
     # ---------------------------------------------------------
     arrow_y = 86
-    arrow_length = 92
+    arrow_start_x = min(frame_width - 26, zone_x1 + 125)
+    arrow_end_x = max(26, zone_x1 - 95)
 
-    if ENTRY_DIRECTION == "right":
-        arrow_start = (
-            max(26, line_x - arrow_length - 28),
-            arrow_y,
-        )
-        arrow_end = (
-            max(36, line_x - 28),
-            arrow_y,
-        )
-
-        direction_text = "ENTRY"
-        text_x = max(
-            18,
-            arrow_start[0] - 68,
-        )
-
-    elif ENTRY_DIRECTION == "left":
-        arrow_start = (
-            min(frame_width - 26, line_x + arrow_length + 28),
-            arrow_y,
-        )
-        arrow_end = (
-            min(frame_width - 36, line_x + 28),
-            arrow_y,
-        )
-
-        direction_text = "ENTRY"
-        text_x = min(
-            frame_width - 78,
-            arrow_start[0] + 12,
-        )
-
-    else:
-        raise ValueError(
-            "ENTRY_DIRECTION은 'right' 또는 'left'여야 합니다."
-        )
-
-    # 화살표 shadow/glow
     arrow_glow = frame.copy()
     cv2.arrowedLine(
         arrow_glow,
-        arrow_start,
-        arrow_end,
-        line_color,
+        (arrow_start_x, arrow_y),
+        (arrow_end_x, arrow_y),
+        zone_color,
         7,
         cv2.LINE_AA,
-        tipLength=0.20,
+        tipLength=0.18,
     )
-
     cv2.addWeighted(
         arrow_glow,
         0.12,
@@ -2909,21 +2926,68 @@ def draw_entry_guide(
         0,
         frame,
     )
-
     cv2.arrowedLine(
         frame,
-        arrow_start,
-        arrow_end,
-        line_color,
+        (arrow_start_x, arrow_y),
+        (arrow_end_x, arrow_y),
+        zone_color,
         2,
         cv2.LINE_AA,
-        tipLength=0.20,
+        tipLength=0.18,
     )
 
     cv2.putText(
         frame,
-        direction_text,
-        (text_x, arrow_y + 6),
+        "ENTRY",
+        (max(18, arrow_end_x - 4), arrow_y - 12),
+        font,
+        0.46,
+        muted_color,
+        1,
+        cv2.LINE_AA,
+    )
+
+    # ---------------------------------------------------------
+    # 5. 아래쪽으로 ZONE을 빠져나와도 ENTRY
+    # ---------------------------------------------------------
+    bottom_arrow_x = max(
+        zone_x1 + 35,
+        min(zone_x2 - 35, (zone_x1 + zone_x2) // 2),
+    )
+    bottom_arrow_start_y = max(zone_y1 + 70, zone_y2 - 95)
+    bottom_arrow_end_y = min(frame_height - 24, zone_y2 + 75)
+
+    bottom_glow = frame.copy()
+    cv2.arrowedLine(
+        bottom_glow,
+        (bottom_arrow_x, bottom_arrow_start_y),
+        (bottom_arrow_x, bottom_arrow_end_y),
+        zone_color,
+        7,
+        cv2.LINE_AA,
+        tipLength=0.18,
+    )
+    cv2.addWeighted(
+        bottom_glow,
+        0.12,
+        frame,
+        0.88,
+        0,
+        frame,
+    )
+    cv2.arrowedLine(
+        frame,
+        (bottom_arrow_x, bottom_arrow_start_y),
+        (bottom_arrow_x, bottom_arrow_end_y),
+        zone_color,
+        2,
+        cv2.LINE_AA,
+        tipLength=0.18,
+    )
+    cv2.putText(
+        frame,
+        "ENTRY",
+        (bottom_arrow_x + 10, min(frame_height - 12, zone_y2 + 42)),
         font,
         0.46,
         muted_color,
@@ -3025,6 +3089,8 @@ def cleanup_track_state(
     current_frame_index: int,
     last_seen_by_local_id: dict[int, float],
     previous_x_by_local_id: dict[int, int],
+    previous_y_by_local_id: dict[int, int],
+    entry_zone_armed_by_local_id: dict[int, bool],
     body_candidates_by_local_id: dict[int, list[BodyCandidate]],
     face_candidates_by_local_id: dict[int, list[FaceCandidate]],
     body_grace_deadline_by_local_id: dict[int, float],
@@ -3069,6 +3135,8 @@ def cleanup_track_state(
     for local_id in expired_local_ids:
         last_seen_by_local_id.pop(local_id, None)
         previous_x_by_local_id.pop(local_id, None)
+        previous_y_by_local_id.pop(local_id, None)
+        entry_zone_armed_by_local_id.pop(local_id, None)
         body_candidates_by_local_id.pop(local_id, None)
         face_candidates_by_local_id.pop(local_id, None)
         body_grace_deadline_by_local_id.pop(local_id, None)
@@ -3229,9 +3297,21 @@ def main() -> None:
 
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    entry_line_x = int(frame_width * ENTRY_LINE_X_RATIO)
+
+    entry_zone_x1 = int(frame_width * ENTRY_ZONE_X1_RATIO)
+    entry_zone_x2 = min(
+        frame_width - 1,
+        int(frame_width * ENTRY_ZONE_X2_RATIO) - 1,
+    )
+    entry_zone_y1 = int(frame_height * ENTRY_ZONE_Y1_RATIO)
+    entry_zone_y2 = min(
+        frame_height - 1,
+        int(frame_height * ENTRY_ZONE_Y2_RATIO) - 1,
+    )
 
     previous_x_by_local_id: dict[int, int] = {}
+    previous_y_by_local_id: dict[int, int] = {}
+    entry_zone_armed_by_local_id: dict[int, bool] = {}
     last_seen_by_local_id: dict[int, float] = {}
     body_candidates_by_local_id: dict[int, list[BodyCandidate]] = {}
     face_candidates_by_local_id: dict[int, list[FaceCandidate]] = {}
@@ -3257,8 +3337,12 @@ def main() -> None:
     print("============================================")
     print("GPU              :", torch.cuda.get_device_name(0))
     print(f"카메라           : /dev/video{CAMERA_DEVICE}")
-    print(f"ENTRY 방향       : {ENTRY_DIRECTION}")
-    print(f"ENTRY LINE       : {ENTRY_LINE_X_RATIO}")
+    print(
+        "ENTRY ZONE       : "
+        f"x={ENTRY_ZONE_X1_RATIO:.2f}~{ENTRY_ZONE_X2_RATIO:.2f}, "
+        f"y={ENTRY_ZONE_Y1_RATIO:.2f}~{ENTRY_ZONE_Y2_RATIO:.2f}"
+    )
+    print("ENTRY 조건       : ZONE 내부 확인 후 왼쪽 또는 아래쪽 경계 이탈")
     print("Main Loop        : YOLO + ByteTrack + ENTRY")
     print("Face Worker      : YuNet + SFace 비동기")
     print("Entry Worker     : OSNet + Capture + MQTT 비동기")
@@ -3321,7 +3405,10 @@ def main() -> None:
 
             draw_entry_guide(
                 frame=annotated_frame,
-                line_x=entry_line_x,
+                zone_x1=entry_zone_x1,
+                zone_y1=entry_zone_y1,
+                zone_x2=entry_zone_x2,
+                zone_y2=entry_zone_y2,
                 frame_width=frame_width,
                 frame_height=frame_height,
             )
@@ -3423,185 +3510,223 @@ def main() -> None:
                                         end_monotonic=current_time,
                                     )
 
+                    # ==================================================
+                    # ENTRY ZONE 상태 갱신
+                    #
+                    # 1) 사람 중심점이 ENTRY ZONE 내부에 한 번 들어오면 ARMED
+                    # 2) ZONE 안에 있는 동안은 등록 전(STRANGER) 상태 유지
+                    # 3) ARMED 상태에서 왼쪽 또는 아래쪽 경계를 빠져나오면 ENTRY
+                    # 4) 그 순간에만 REGISTERING / MQTT ENTRY 처리를 시작
+                    # ==================================================
+
+                    inside_entry_zone = point_in_entry_zone(
+                        center_x=current_x,
+                        center_y=current_y,
+                        zone_x1=entry_zone_x1,
+                        zone_y1=entry_zone_y1,
+                        zone_x2=entry_zone_x2,
+                        zone_y2=entry_zone_y2,
+                    )
+
+                    if inside_entry_zone and not already_sent:
+                        entry_zone_armed_by_local_id[local_id] = True
+
                     previous_x = previous_x_by_local_id.get(local_id)
+                    previous_y = previous_y_by_local_id.get(local_id)
                     crossed_now = False
+                    entry_exit_direction: str | None = None
 
                     # ==================================================
                     # 1순위: ENTRY 판정
+                    # - 왼쪽 경계 이탈
+                    # - 아래쪽 경계 이탈
+                    # 둘 중 하나면 ENTRY
                     # ==================================================
 
                     if (
                         previous_x is not None
+                        and previous_y is not None
                         and not already_sent
-                        and crossed_entry_line(
-                            previous_x=previous_x,
-                            current_x=current_x,
-                            line_x=entry_line_x,
+                        and entry_zone_armed_by_local_id.get(
+                            local_id,
+                            False,
                         )
                     ):
-                        crossed_now = True
-
-                        # BODY도 Face와 같이 공유 list를 그대로 사용한다.
-                        # ENTRY 직후 BODY_ENTRY_GRACE_SEC 동안 Main 영상 loop가
-                        # 같은 list에 후보를 계속 추가/교체할 수 있다.
-                        body_candidates = (
-                            body_candidates_by_local_id.setdefault(
-                                local_id,
-                                [],
-                            )
+                        entry_exit_direction = exited_entry_zone(
+                            previous_x=previous_x,
+                            previous_y=previous_y,
+                            current_x=current_x,
+                            current_y=current_y,
+                            zone_x1=entry_zone_x1,
+                            zone_y2=entry_zone_y2,
                         )
 
-                        # Track이 너무 짧아서 후보가 비어있는 예외 상황 대비
-                        if not body_candidates:
-                            crop_area = max(1, (x2 - x1) * (y2 - y1))
-                            body_candidates.append(
-                                BodyCandidate(
-                                    image=current_crop.copy(),
-                                    confidence=float(confidence),
-                                    quality=float(confidence),
-                                    selection_score=(
-                                        float(crop_area)
-                                        * float(confidence)
-                                    ),
-                                    frame_index=frame_index,
+                        if entry_exit_direction is not None:
+                            crossed_now = True
+                            entry_zone_armed_by_local_id[local_id] = False
+
+                    if crossed_now:
+                            # BODY도 Face와 같이 공유 list를 그대로 사용한다.
+                            # ENTRY 직후 BODY_ENTRY_GRACE_SEC 동안 Main 영상 loop가
+                            # 같은 list에 후보를 계속 추가/교체할 수 있다.
+                            body_candidates = (
+                                body_candidates_by_local_id.setdefault(
+                                    local_id,
+                                    [],
                                 )
                             )
 
-                        entry_timestamp = (
-                            datetime.now()
-                            .astimezone()
-                            .isoformat(timespec="seconds")
-                        )
-                        request_id = make_request_id(local_id)
-
-                        body_grace_start_monotonic = time.monotonic()
-                        body_grace_deadline = (
-                            body_grace_start_monotonic
-                            + BODY_ENTRY_GRACE_SEC
-                        )
-                        body_grace_deadline_by_local_id[local_id] = (
-                            body_grace_deadline
-                        )
-
-                        body_grace_diag = BodyGraceDiagnostics(
-                            request_id=request_id,
-                            local_track_id=local_id,
-                            initial_count=len(body_candidates),
-                            target_count=BODY_TOP_K,
-                            grace_sec=BODY_ENTRY_GRACE_SEC,
-                            start_frame=frame_index,
-                            start_monotonic=body_grace_start_monotonic,
-                        )
-                        body_grace_diag_by_local_id[local_id] = (
-                            body_grace_diag
-                        )
-
-                        print()
-                        print("[A BODY GRACE START]")
-                        print(f"request_id     : {request_id}")
-                        print(f"local_track_id : {local_id}")
-                        print(
-                            f"initial_count  : "
-                            f"{len(body_candidates)}"
-                        )
-                        print(f"target_count   : {BODY_TOP_K}")
-                        print(
-                            f"grace_sec      : "
-                            f"{BODY_ENTRY_GRACE_SEC:.2f}"
-                        )
-                        print(f"start_frame    : {frame_index}")
-
-                        # ENTRY 순간 이미 TOP-K라면 즉시 종료 상태로 기록한다.
-                        if len(body_candidates) >= BODY_TOP_K:
-                            body_grace_diag.finish_once(
-                                reason="TARGET_REACHED",
-                                end_frame=frame_index,
-                                end_monotonic=body_grace_start_monotonic,
-                            )
-
-                        # 공유 list를 그대로 사용한다. ENTRY 직전에 이미 요청된
-                        # Face 작업이 늦게 완료되면 FACE_ENTRY_GRACE_SEC 동안
-                        # 이 list에 후보가 추가될 수 있다.
-                        face_candidates = (
-                            face_candidates_by_local_id.setdefault(
-                                local_id,
-                                [],
-                            )
-                        )
-                        face_grace_deadline = (
-                            time.monotonic() + FACE_ENTRY_GRACE_SEC
-                        )
-                        face_grace_deadline_by_local_id[local_id] = (
-                            face_grace_deadline
-                        )
-
-                        pending_identity = EntryIdentity(
-                            local_track_id=local_id,
-                            request_id=request_id,
-                            person_status="REGISTERING",
-                            entry_at=entry_timestamp,
-                            updated_at=entry_timestamp,
-                        )
-
-                        with identity_lock:
-                            identity_by_local_id[local_id] = pending_identity
-                            local_id_by_request_id[request_id] = local_id
-
-                        # 여기서는 Face Task를 제거하지 않는다.
-                        # ENTRY 직전에 이미 제출된 최신 Task가 유예시간 안에
-                        # 끝날 수 있도록 살려둔다.
-
-                        # 같은 프레임 박스에 REGISTERING이 바로 표시되도록 갱신
-                        already_sent = True
-
-                        print()
-                        print("===== A ENTRY 감지 =====")
-                        print(f"Local ID    : {local_id}")
-                        print(f"Request ID  : {request_id}")
-                        print(f"Entry Time  : {entry_timestamp}")
-                        print("화면 상태   : REGISTERING...")
-                        print(
-                            f"Body 후보   : "
-                            f"{len(body_candidates)}/{BODY_TOP_K}"
-                        )
-                        print(
-                            f"Face 후보   : "
-                            f"{len(face_candidates)}/{FACE_TOP_K}"
-                        )
-                        print("ENTRY 처리  : Background Worker")
-                        print("========================")
-
-                        try:
-                            entry_job_queue.put_nowait(
-                                EntryJob(
-                                    local_track_id=local_id,
-                                    request_id=request_id,
-                                    timestamp=entry_timestamp,
-                                    body_candidates=body_candidates,
-                                    body_grace_deadline=(
-                                        body_grace_deadline
-                                    ),
-                                    body_grace_diag=body_grace_diag,
-                                    frame_progress=frame_progress,
-                                    enqueued_monotonic=time.monotonic(),
-                                    face_candidates=face_candidates,
-                                    face_grace_deadline=(
-                                        face_grace_deadline
-                                    ),
+                            # Track이 너무 짧아서 후보가 비어있는 예외 상황 대비
+                            if not body_candidates:
+                                crop_area = max(1, (x2 - x1) * (y2 - y1))
+                                body_candidates.append(
+                                    BodyCandidate(
+                                        image=current_crop.copy(),
+                                        confidence=float(confidence),
+                                        quality=float(confidence),
+                                        selection_score=(
+                                            float(crop_area)
+                                            * float(confidence)
+                                        ),
+                                        frame_index=frame_index,
+                                    )
                                 )
+
+                            entry_timestamp = (
+                                datetime.now()
+                                .astimezone()
+                                .isoformat(timespec="seconds")
+                            )
+                            request_id = make_request_id(local_id)
+
+                            body_grace_start_monotonic = time.monotonic()
+                            body_grace_deadline = (
+                                body_grace_start_monotonic
+                                + BODY_ENTRY_GRACE_SEC
+                            )
+                            body_grace_deadline_by_local_id[local_id] = (
+                                body_grace_deadline
                             )
 
-                        except queue.Full:
-                            with identity_lock:
-                                identity = identity_by_local_id.get(local_id)
-                                if identity is not None:
-                                    identity.person_status = "SEND_ERROR"
+                            body_grace_diag = BodyGraceDiagnostics(
+                                request_id=request_id,
+                                local_track_id=local_id,
+                                initial_count=len(body_candidates),
+                                target_count=BODY_TOP_K,
+                                grace_sec=BODY_ENTRY_GRACE_SEC,
+                                start_frame=frame_index,
+                                start_monotonic=body_grace_start_monotonic,
+                            )
+                            body_grace_diag_by_local_id[local_id] = (
+                                body_grace_diag
+                            )
 
+                            print()
+                            print("[A BODY GRACE START]")
+                            print(f"request_id     : {request_id}")
+                            print(f"local_track_id : {local_id}")
                             print(
-                                "[Camera A] ENTRY Queue가 가득 찼습니다."
+                                f"initial_count  : "
+                                f"{len(body_candidates)}"
+                            )
+                            print(f"target_count   : {BODY_TOP_K}")
+                            print(
+                                f"grace_sec      : "
+                                f"{BODY_ENTRY_GRACE_SEC:.2f}"
+                            )
+                            print(f"start_frame    : {frame_index}")
+
+                            # ENTRY 순간 이미 TOP-K라면 즉시 종료 상태로 기록한다.
+                            if len(body_candidates) >= BODY_TOP_K:
+                                body_grace_diag.finish_once(
+                                    reason="TARGET_REACHED",
+                                    end_frame=frame_index,
+                                    end_monotonic=body_grace_start_monotonic,
+                                )
+
+                            # 공유 list를 그대로 사용한다. ENTRY 직전에 이미 요청된
+                            # Face 작업이 늦게 완료되면 FACE_ENTRY_GRACE_SEC 동안
+                            # 이 list에 후보가 추가될 수 있다.
+                            face_candidates = (
+                                face_candidates_by_local_id.setdefault(
+                                    local_id,
+                                    [],
+                                )
+                            )
+                            face_grace_deadline = (
+                                time.monotonic() + FACE_ENTRY_GRACE_SEC
+                            )
+                            face_grace_deadline_by_local_id[local_id] = (
+                                face_grace_deadline
                             )
 
-                        # Body/Face 후보는 각각 grace 종료/Track cleanup까지 유지한다.
+                            pending_identity = EntryIdentity(
+                                local_track_id=local_id,
+                                request_id=request_id,
+                                person_status="REGISTERING",
+                                entry_at=entry_timestamp,
+                                updated_at=entry_timestamp,
+                            )
+
+                            with identity_lock:
+                                identity_by_local_id[local_id] = pending_identity
+                                local_id_by_request_id[request_id] = local_id
+
+                            # 여기서는 Face Task를 제거하지 않는다.
+                            # ENTRY 직전에 이미 제출된 최신 Task가 유예시간 안에
+                            # 끝날 수 있도록 살려둔다.
+
+                            # 같은 프레임 박스에 REGISTERING이 바로 표시되도록 갱신
+                            already_sent = True
+
+                            print()
+                            print("===== A ENTRY 감지 =====")
+                            print(f"Local ID    : {local_id}")
+                            print(f"Request ID  : {request_id}")
+                            print(f"Entry Time  : {entry_timestamp}")
+                            print("화면 상태   : REGISTERING...")
+                            print(
+                                f"Body 후보   : "
+                                f"{len(body_candidates)}/{BODY_TOP_K}"
+                            )
+                            print(
+                                f"Face 후보   : "
+                                f"{len(face_candidates)}/{FACE_TOP_K}"
+                            )
+                            print("ENTRY 처리  : Background Worker")
+                            print("========================")
+
+                            try:
+                                entry_job_queue.put_nowait(
+                                    EntryJob(
+                                        local_track_id=local_id,
+                                        request_id=request_id,
+                                        timestamp=entry_timestamp,
+                                        body_candidates=body_candidates,
+                                        body_grace_deadline=(
+                                            body_grace_deadline
+                                        ),
+                                        body_grace_diag=body_grace_diag,
+                                        frame_progress=frame_progress,
+                                        enqueued_monotonic=time.monotonic(),
+                                        face_candidates=face_candidates,
+                                        face_grace_deadline=(
+                                            face_grace_deadline
+                                        ),
+                                    )
+                                )
+
+                            except queue.Full:
+                                with identity_lock:
+                                    identity = identity_by_local_id.get(local_id)
+                                    if identity is not None:
+                                        identity.person_status = "SEND_ERROR"
+
+                                print(
+                                    "[Camera A] ENTRY Queue가 가득 찼습니다."
+                                )
+
+                            # Body/Face 후보는 각각 grace 종료/Track cleanup까지 유지한다.
 
                     # ==================================================
                     # 2순위: Face 작업 제출
@@ -3622,6 +3747,7 @@ def main() -> None:
                         )
 
                     previous_x_by_local_id[local_id] = current_x
+                    previous_y_by_local_id[local_id] = current_y
 
                     # ----------------------------------------
                     # 화면 표시
@@ -3733,6 +3859,10 @@ def main() -> None:
                 current_frame_index=frame_index,
                 last_seen_by_local_id=last_seen_by_local_id,
                 previous_x_by_local_id=previous_x_by_local_id,
+                previous_y_by_local_id=previous_y_by_local_id,
+                entry_zone_armed_by_local_id=(
+                    entry_zone_armed_by_local_id
+                ),
                 body_candidates_by_local_id=body_candidates_by_local_id,
                 face_candidates_by_local_id=face_candidates_by_local_id,
                 body_grace_deadline_by_local_id=(
