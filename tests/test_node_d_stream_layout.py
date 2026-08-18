@@ -122,6 +122,43 @@ class NodeDStreamLayoutTest(unittest.TestCase):
         self.assertEqual(status, "ANOMALY DETECTED")
         self.assertEqual(color, (40, 60, 255))
 
+    def test_display_status_with_person_and_journey_id_labels(self) -> None:
+        arrived_annotation = [
+            node_d.DisplayAnnotation(
+                box=(0, 0, 10, 10),
+                label="P000013 | J000017 | ARRIVED",
+                detail="A > C > [D]",
+                color=(0, 255, 0),
+            )
+        ]
+        status, color = node_d.display_status(arrived_annotation)
+        self.assertEqual(status, "STATUS: ARRIVAL")
+        self.assertEqual(color, (40, 230, 80))
+
+        checking_annotation = [
+            node_d.DisplayAnnotation(
+                box=(0, 0, 10, 10),
+                label="CHECKING: P000013 | J000017",
+                detail="BEST 0.77 TOP2 0.75 3/5",
+                color=(0, 255, 255),
+            )
+        ]
+        status, color = node_d.display_status(checking_annotation)
+        self.assertEqual(status, "STATUS: VERIFYING")
+        self.assertEqual(color, (0, 220, 255))
+
+        verifying_annotation = [
+            node_d.DisplayAnnotation(
+                box=(0, 0, 10, 10),
+                label="P000013 | J000017 | VERIFYING",
+                detail="A > C > [D]",
+                color=(0, 255, 255),
+            )
+        ]
+        status, color = node_d.display_status(verifying_annotation)
+        self.assertEqual(status, "STATUS: VERIFYING")
+        self.assertEqual(color, (0, 220, 255))
+
     def test_live_hud_uses_required_label_and_red_indicator(self) -> None:
         source = np.full((480, 640, 3), 127, dtype=np.uint8)
 

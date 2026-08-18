@@ -2614,6 +2614,11 @@ def main() -> None:
                             if completed is not None
                             else "UNKNOWN"
                         )
+                        display_journey_id = (
+                            completed.journey_id
+                            if completed is not None
+                            else journey_id
+                        )
                         display_route = (
                             route_text(completed.route)
                             if completed is not None
@@ -2622,11 +2627,11 @@ def main() -> None:
                         failures = verify_failures.get(local_id, 0)
                         score = verify_scores.get(local_id, 0.0)
                         if failures:
-                            label = f"{person_uid} | VERIFYING"
+                            label = f"{person_uid} | {display_journey_id} | VERIFYING"
                             sub = display_route
                             color = (0, 255, 255)
                         else:
-                            label = f"{person_uid} | ARRIVED"
+                            label = f"{person_uid} | {display_journey_id} | ARRIVED"
                             sub = display_route
                             color = (0, 255, 0)
                     else:
@@ -2644,7 +2649,8 @@ def main() -> None:
                                 if temporary_candidate is not None
                                 else "UNKNOWN"
                             )
-                            label = f"CHECKING: {temporary_person_uid}"
+                            temporary_journey_id = temporary
+                            label = f"CHECKING: {temporary_person_uid} | {temporary_journey_id}"
                             sub = (
                                 f"BEST {best:.2f} TOP2 {top2:.2f} "
                                 f"{tentative_count.get(local_id, 0)}/"
