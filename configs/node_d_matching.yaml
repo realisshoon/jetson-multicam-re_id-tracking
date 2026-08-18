@@ -1,0 +1,35 @@
+# Camera D arrival matching guardrails.
+#
+# Calibration evidence (logs/node_d_arrivals.csv, 2026-08-10..13):
+# - 150 historical rows; 20 had an invalid zero-second B/C->D duration.
+# - positive observed duration range was 1..287 seconds.
+# - the existing candidate timeout was 300 seconds.
+# - source timestamps have one-second precision and D runs at 15 FPS.
+time:
+  clock_tolerance_seconds: 2.0
+  min_passage_to_d_seconds: 1.0
+  max_passage_to_d_seconds: 300.0
+
+# No pre-existing D ROI/crossing line exists in the code.  Eligibility therefore
+# uses the image boundary itself: a centroid must first be observed in the outer
+# band and later cross into the inner area.  These normalized values are
+# resolution-independent and are never rendered on /stream.
+entry:
+  boundary_band_ratio: 0.15
+  interior_band_ratio: 0.20
+
+# Re-ID is sampled every 3 frames at 15 FPS.  A 0.5 second gap makes samples
+# independent from adjacent inference calls.  5-of-4 replaces the old immediate
+# three-call completion, and 0.08 resets the window on a J000446-like collapse
+# (0.705 -> 0.522, delta 0.183).
+confirmation:
+  window_size: 5
+  required_passes: 4
+  min_sample_interval_seconds: 0.5
+  max_score_spread: 0.08
+
+# This is inter-Journey combined-score separation, not the within-gallery Top2.
+# 0.04 preserves the previously configured MATCH_MARGIN while applying it to
+# the correct comparison dimension.
+competition:
+  min_journey_margin: 0.04

@@ -1,0 +1,300 @@
+{% load static %}<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ display.person_uid }} · 열정강혁 통합관제</title>
+<link rel="stylesheet" href="{% static 'tracking/journey_pages.css' %}">
+<style>
+.hero-thumb{width:88px;height:118px;object-fit:cover;border-radius:5px;
+  background:#000;border:1px solid var(--rule);flex:0 0 auto}
+.hero-thumb-empty{display:grid;place-items:center;font-family:var(--mono);
+  font-size:10px;color:var(--dimmer)}
+.hero-actions{margin-left:auto;display:flex;gap:8px}
+.btn-outline{font-family:var(--mono);font-size:12.5px;padding:7px 14px;
+  border-radius:3px;cursor:pointer;border:1px solid var(--rule-2);
+  background:var(--panel-3);color:var(--dim);transition:.14s}
+.btn-outline:hover{color:var(--text);border-color:var(--calm)}
+.btn-outline.danger:hover{color:var(--alert);border-color:var(--alert)}
+.edit-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:12px 14px;border-bottom:1px solid var(--rule-2)}
+.edit-row:last-child{border-bottom:none}
+.edit-row label{font-family:var(--mono);font-size:11px;letter-spacing:.1em;
+  color:var(--dimmer);text-transform:uppercase;min-width:90px}
+.edit-row input[type=text]{flex:1;min-width:140px;background:#000;
+  border:1px solid var(--rule-2);color:var(--text);padding:7px 10px;
+  border-radius:3px;font-size:13.5px}
+.edit-hint{font-size:11.5px;color:var(--dimmer);flex-basis:100%}
+
+/* ── 인물 검색 후보 모달(미등록자 감지 기록과 동일) ────────────────── */
+.review-modal{position:fixed;inset:0;z-index:100;display:flex;
+  align-items:center;justify-content:center}
+.review-modal[hidden]{display:none}
+.review-modal-backdrop{position:absolute;inset:0;background:#000a}
+.review-modal-box{position:relative;width:min(420px,92vw);max-height:80vh;
+  display:flex;flex-direction:column;background:var(--panel);
+  border:1px solid var(--rule);border-radius:6px;box-shadow:0 20px 50px #000a;
+  overflow:hidden}
+.review-modal-head{display:flex;align-items:center;justify-content:space-between;
+  padding:12px 14px;border-bottom:1px solid var(--rule);font-size:14px;font-weight:600}
+.review-modal-head button{background:none;border:none;color:var(--dim);
+  font-size:16px;cursor:pointer;line-height:1}
+.review-modal-head button:hover{color:var(--text)}
+.review-modal-search{margin:10px 14px 0;padding:8px 10px;background:var(--panel-3);
+  border:1px solid var(--rule-2);border-radius:3px;color:var(--text);font-size:13.5px}
+.review-modal-list{flex:1;overflow-y:auto;padding:10px 14px;min-height:120px;
+  display:flex;flex-direction:column;gap:6px}
+.review-cand{display:flex;align-items:center;gap:10px;padding:6px 8px;
+  border-radius:4px;cursor:pointer;border:1px solid transparent;background:var(--panel-2)}
+.review-cand:hover{border-color:var(--calm)}
+.review-cand img,.review-cand-noimg{width:36px;height:48px;object-fit:cover;
+  border-radius:3px;background:#000;border:1px solid var(--rule);flex:0 0 auto}
+.review-cand-noimg{display:grid;place-items:center;font-family:var(--mono);
+  font-size:7px;color:var(--dimmer)}
+.review-cand-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+.review-cand-id{font-family:var(--mono);font-weight:700;font-size:13.5px;color:var(--text)}
+.review-cand-meta{font-family:var(--mono);font-size:11px;color:var(--dimmer)}
+.review-modal-manual{display:flex;align-items:center;gap:8px;padding:12px 14px;
+  border-top:1px solid var(--rule);flex-wrap:wrap;font-size:12px;color:var(--dim)}
+.review-modal-manual input{flex:1;min-width:100px;background:#000;
+  border:1px solid var(--calm);color:var(--text);padding:6px 8px;border-radius:3px;
+  font-family:var(--mono);font-size:12.5px}
+.review-modal-manual button{flex:0 0 auto;font-size:12.5px;padding:6px 12px;
+  border-radius:3px;cursor:pointer;border:1px solid var(--rule-2);
+  background:var(--panel-3);color:var(--dim);transition:.14s}
+.review-modal-manual button:hover{color:var(--text);border-color:var(--calm)}
+</style>
+</head>
+<body>
+{% if person %}{% csrf_token %}{% endif %}
+
+<div class="bar">
+  <div class="brand"><a href="{% url 'dashboard' %}" title="대시보드"><img class="brand-logo"
+    src="{% static 'tracking/logo_ver2.png' %}" alt="WOODIGANI"></a></div>
+  <div class="page-title">사람 상세</div>
+  <div class="spacer"></div>
+  <a class="back-link" href="{% url 'journeys' %}">← 이동 목록</a>
+</div>
+
+<section class="hero">
+  {% if thumb_url %}
+  <img class="hero-thumb" src="{{ thumb_url }}" alt="">
+  {% else %}
+  <div class="hero-thumb hero-thumb-empty">NO IMG</div>
+  {% endif %}
+  <div>
+    <div class="stat">Person ID</div>
+    <div class="pid-big">{{ display.person_uid }}</div>
+  </div>
+  <span class="visitbadge {% if display.is_first_visit %}first{% else %}returning{% endif %}">
+    {% if display.is_first_visit %}FIRST VISIT{% else %}RETURNING{% endif %}
+  </span>
+  <div class="stat">상태<b class="num">{{ display.status_label }}</b></div>
+  <div class="stat">총 방문 횟수<b class="num">{{ display.visit_count|default:"—" }}</b></div>
+  <div class="stat">최근 방문 시각<b class="num">{{ display.last_seen|default:"—" }}</b></div>
+  {% if person.label %}<div class="stat">등록 이름<b>{{ person.label }}</b></div>{% endif %}
+  {% if person %}
+  <div class="hero-actions">
+    <button type="button" id="btn-edit" class="btn-outline">수정</button>
+    <button type="button" id="btn-delete" class="btn-outline danger">삭제</button>
+  </div>
+  {% endif %}
+</section>
+
+{% if person %}
+<section class="panel" id="edit-panel" hidden>
+  <h2>인물 정보 수정</h2>
+  <div class="edit-row">
+    <label>이름</label>
+    <input type="text" id="edit-label-input" value="{{ person.label }}" maxlength="50" placeholder="이름(선택)">
+    <button type="button" class="btn-outline" id="btn-save-label">저장</button>
+  </div>
+  <div class="edit-row">
+    <label>ID 정정</label>
+    <button type="button" class="btn-outline" id="btn-open-merge">일치하는 다른 인물 찾아 합치기</button>
+    <span class="edit-hint">Person ID(P000006 등)는 메인 서버가 배정하는 값이라 여기서 직접
+      바꿀 수 없다 — 잘못 나뉜 동일인이면 "합치기"로 하나로 모아라. 병합하면 더 오래된 쪽
+      ID로 합쳐지고 나머지는 사라진다(되돌릴 수 없음).</span>
+  </div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>과거 Journey 목록 <span>{% if journeys %}{{ journeys|length }}{% else %}{{ main_journeys|length }}{% endif %}</span></h2>
+  <div class="scroll">
+  {% if journeys %}
+  <table>
+    <thead><tr>
+      <th>Journey</th><th>여정 상태</th><th>경로</th><th>진입 시각</th><th>D 이탈</th>
+      <th class="num">소요(초)</th><th class="num">Final Score</th><th>판정</th>
+    </tr></thead>
+    <tbody>
+    {% for j in journeys %}
+    <tr>
+      <td class="mono">{{ j.journey_id }}</td>
+      <td>{{ j.journey_status|default:"—" }}</td>
+      <td class="mono">{{ j.route|default:"—" }}</td>
+      <td class="num">{{ j.entry_at|date:"Y-m-d H:i:s"|default:"—" }}</td>
+      <td class="num">{{ j.d_exit_at|date:"Y-m-d H:i:s"|default:"—" }}</td>
+      <td class="num">{{ j.journey_elapsed_seconds|floatformat:1|default:"—" }}</td>
+      <td class="num">{{ j.final_score|floatformat:3|default:"—" }}</td>
+      <td>{% if j.final_review_result %}<span class="badge {{ j.final_review_result }}">{{ j.get_final_review_result_display }}</span>{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% elif main_journeys %}
+  <table>
+    <thead><tr>
+      <th>Journey</th><th>여정 상태</th><th>경로</th><th>진입 시각</th><th>D 이탈</th>
+      <th class="num">소요(초)</th>
+    </tr></thead>
+    <tbody>
+    {% for j in main_journeys %}
+    <tr>
+      <td class="mono">{{ j.journey_id|default:"—" }}</td>
+      <td>{{ j.journey_status|default:"—" }}</td>
+      <td class="mono">{{ j.route|default:"—" }}</td>
+      <td class="num">{{ j.entry_at|default:"—" }}</td>
+      <td class="num">{{ j.d_exit_at|default:"—" }}</td>
+      <td class="num">{{ j.elapsed|floatformat:1|default:"—" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="note">메인 서버 요약 정보다 — 이 대시보드에 아직 상세(사진/스코어)가
+    안 쌓인 인물이라 최소 정보만 보여준다.</div>
+  {% else %}
+  <p class="empty">기록된 Journey 가 없다.</p>
+  {% endif %}
+  </div>
+</section>
+
+{% if person %}
+<div class="review-modal" id="review-modal" hidden>
+  <div class="review-modal-backdrop"></div>
+  <div class="review-modal-box">
+    <div class="review-modal-head">
+      <span>합칠 인물 선택</span>
+      <button type="button" class="review-modal-close" aria-label="닫기">✕</button>
+    </div>
+    <input type="text" class="review-modal-search" placeholder="person_uid 또는 이름 검색…">
+    <div class="review-modal-list"></div>
+    <div class="review-modal-manual">
+      <span>목록에 없으면 직접 입력:</span>
+      <input type="text" class="review-modal-manual-input" placeholder="예: P000006">
+      <button type="button" class="review-modal-manual-go">선택</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s){return String(s??'').replace(/[&<>"]/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+const CSRF = document.querySelector('[name=csrfmiddlewaretoken]').value;
+const PERSON_UID = "{{ person.external_id|escapejs }}";
+const PERSON_PK = {{ person.pk }};
+
+document.getElementById('btn-edit').onclick = () => {
+  const panel = document.getElementById('edit-panel');
+  panel.hidden = !panel.hidden;
+};
+
+document.getElementById('btn-save-label').onclick = async () => {
+  const label = document.getElementById('edit-label-input').value.trim();
+  const body = new URLSearchParams({label});
+  let r;
+  try{
+    r = await (await fetch(`/api/person/${PERSON_PK}/rename/`, {
+      method: 'POST', headers: {'X-CSRFToken': CSRF}, body,
+    })).json();
+  } catch(e){ alert('저장 실패'); return; }
+  if(r.ok) location.reload(); else alert(r.error || '저장 실패');
+};
+
+document.getElementById('btn-delete').onclick = async () => {
+  if(!confirm(`${PERSON_UID} 를 삭제하시겠습니까? 이 동작은 되돌릴 수 없다.`)) return;
+  let r;
+  try{
+    r = await (await fetch(`/api/persons/${encodeURIComponent(PERSON_UID)}/delete/`, {
+      method: 'POST', headers: {'X-CSRFToken': CSRF},
+    })).json();
+  } catch(e){ alert('삭제 실패'); return; }
+  if(!r.ok){ alert(r.error || '삭제 실패'); return; }
+  location.href = "{% url 'persons_index' %}";
+};
+
+document.getElementById('btn-open-merge').onclick = async () => {
+  const uid = await openReviewModal();
+  if(!uid || uid === PERSON_UID) return;
+  if(!confirm(`${PERSON_UID} 를 ${uid} 와 합치시겠습니까? 더 오래된 쪽 ID로 합쳐지고 나머지는 삭제된다 — 되돌릴 수 없다.`)) return;
+  const body = new URLSearchParams({target_person_uid: uid});
+  let r;
+  try{
+    r = await (await fetch(`/api/persons/${encodeURIComponent(PERSON_UID)}/merge/`, {
+      method: 'POST', headers: {'X-CSRFToken': CSRF}, body,
+    })).json();
+  } catch(e){ alert('병합 실패'); return; }
+  if(!r.ok){ alert(r.error || '병합 실패'); return; }
+  location.href = `/persons/${encodeURIComponent(r.person_uid)}/`;
+};
+
+/* ── 인물 검색 후보 모달(§api_person_search, 미등록자 감지 기록과 동일 로직) ── */
+const reviewModal       = document.getElementById('review-modal');
+const reviewModalList   = reviewModal.querySelector('.review-modal-list');
+const reviewModalSearch = reviewModal.querySelector('.review-modal-search');
+const reviewModalManual = reviewModal.querySelector('.review-modal-manual-input');
+let reviewModalResolve  = null;
+
+function openReviewModal(){
+  reviewModal.hidden = false;
+  reviewModalSearch.value = '';
+  reviewModalManual.value = '';
+  loadReviewCandidates('');
+  reviewModalSearch.focus();
+  return new Promise(resolve => { reviewModalResolve = resolve; });
+}
+function closeReviewModal(result){
+  reviewModal.hidden = true;
+  if(reviewModalResolve){ reviewModalResolve(result); reviewModalResolve = null; }
+}
+async function loadReviewCandidates(q){
+  reviewModalList.innerHTML = '<p class="empty">불러오는 중…</p>';
+  let data;
+  try{ data = await (await fetch(`/api/persons/search/?q=${encodeURIComponent(q)}`)).json(); }
+  catch(e){ reviewModalList.innerHTML = '<p class="empty">불러오기 실패</p>'; return; }
+  if(!data.results.length){
+    reviewModalList.innerHTML = '<p class="empty">비슷한 인물이 없다 — 아래에서 직접 입력.</p>';
+    return;
+  }
+  reviewModalList.innerHTML = data.results.map(p => `
+    <div class="review-cand" data-uid="${esc(p.person_uid)}">
+      ${p.thumb_url ? `<img src="${esc(p.thumb_url)}" alt="" loading="lazy">`
+                    : '<div class="review-cand-noimg">NO IMG</div>'}
+      <div class="review-cand-info">
+        <span class="review-cand-id">${esc(p.person_uid)}</span>
+        <span class="review-cand-meta">${p.label ? esc(p.label)+' · ' : ''}방문 ${p.visit_count}회${p.confirmed ? ' · 등록됨' : ''}</span>
+      </div>
+    </div>`).join('');
+  reviewModalList.querySelectorAll('.review-cand').forEach(el => {
+    el.onclick = () => closeReviewModal(el.dataset.uid);
+  });
+}
+let reviewSearchTimer = null;
+reviewModalSearch.oninput = () => {
+  clearTimeout(reviewSearchTimer);
+  reviewSearchTimer = setTimeout(() => loadReviewCandidates(reviewModalSearch.value.trim()), 200);
+};
+reviewModal.querySelector('.review-modal-close').onclick = () => closeReviewModal(null);
+reviewModal.querySelector('.review-modal-backdrop').onclick = () => closeReviewModal(null);
+reviewModal.querySelector('.review-modal-manual-go').onclick = () => {
+  const v = reviewModalManual.value.trim();
+  closeReviewModal(v || null);
+};
+reviewModalManual.onkeydown = e => {
+  if(e.key === 'Enter') reviewModal.querySelector('.review-modal-manual-go').click();
+};
+</script>
+{% endif %}
+</body>
+</html>

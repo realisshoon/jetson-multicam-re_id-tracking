@@ -1,0 +1,23 @@
+{% extends "admin/login.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+  /* 로고를 훨씬 크게 보여주려고 로그인 카드 폭 자체를 Django 기본값
+     (28em ≈ 448px)보다 넓힌다 — 안 그러면 이미지가 카드 폭에 눌려서
+     아무리 max-width 를 키워도 안 커진다. */
+  .login #container{width:44em;max-width:92vw}
+</style>
+{% endblock %}
+
+{% block branding %}
+<div id="site-name" style="text-align:center;display:flex;flex-direction:column;
+     align-items:center;gap:10px">
+  <img src="{% static 'tracking/logo.png' %}" alt="WOODIGANI"
+       style="max-width:720px;width:100%;height:auto;border-radius:10px">
+  <a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a>
+</div>
+{% if user.is_anonymous %}
+  {% include "admin/color_theme_toggle.html" %}
+{% endif %}
+{% endblock %}

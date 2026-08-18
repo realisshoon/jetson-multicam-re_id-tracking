@@ -1,0 +1,79 @@
+/* 이동 목록 / 사람 상세 화면 공용 스타일 — dashboard.html 과 같은
+   Bootswatch "Slate" 토큰을 그대로 쓴다(팀 전체 화면 톤 통일). */
+:root{
+  --bg:#000000;
+  --panel:#32383e;  --panel-2:#23272b;  --panel-3:#1b1e21;
+  --rule:#52575c;   --rule-2:#63696f;
+  --text:#dee2e6;   --dim:#aaaaaa;      --dimmer:#7a8288;
+  --calm:#5bc0de;
+  --alert:#ee5f5b;
+  --warn:#f89406;
+  --ok:#62c462;
+  --mono: SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+  --ui: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","Apple SD Gothic Neo",
+        "Noto Sans KR","Malgun Gothic",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--ui)}
+body{padding:12px;font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:var(--calm);text-decoration:none}
+a:hover{text-decoration:underline}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.mono{font-family:var(--mono)}
+
+/* ── 상단 바 ── */
+.bar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  border:1px solid var(--rule);background:var(--panel);
+  padding:10px 16px;border-radius:4px;margin-bottom:12px}
+.brand a{display:block;line-height:0}
+.brand-logo{height:40px;width:auto;display:block}
+.page-title{font-family:var(--mono);font-size:13px;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--dim)}
+.bar .spacer{margin-left:auto}
+.back-link{font-family:var(--mono);font-size:13px;letter-spacing:.05em}
+
+/* ── 패널/표 ── */
+.panel{border:1px solid var(--rule);background:var(--panel);border-radius:4px;
+  margin-bottom:12px}
+.panel>h2{margin:0;padding:10px 14px;border-bottom:1px solid var(--rule);
+  font-family:var(--mono);font-size:12px;letter-spacing:.2em;font-weight:500;
+  text-transform:uppercase;color:var(--dim);
+  display:flex;justify-content:space-between;align-items:center}
+.panel>h2 span{color:var(--dimmer);font-variant-numeric:tabular-nums}
+.panel.review{border-color:var(--warn)}
+.panel.review>h2{color:var(--warn);border-bottom-color:var(--warn)}
+
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px;white-space:nowrap}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--rule-2)}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--dimmer);font-weight:500}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--panel-3)}
+td.num,th.num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+
+.pid{font-family:var(--mono);font-weight:600;color:var(--text)}
+.pid.pending{color:var(--dimmer);font-weight:400;font-style:italic}
+
+.badge{display:inline-block;padding:2px 9px;border-radius:3px;font-family:var(--mono);
+  font-size:11px;letter-spacing:.04em;font-weight:600;white-space:nowrap}
+.badge.NEW{background:#1c3f4a;color:var(--calm)}
+.badge.REVISIT{background:#264d33;color:var(--ok)}
+.badge.MANUAL_REVIEW_REQUIRED{background:#4a3312;color:var(--warn)}
+
+.empty{padding:26px;text-align:center;color:var(--dimmer)}
+.note{padding:10px 14px;font-size:12.5px;color:var(--dimmer);border-top:1px solid var(--rule)}
+
+/* ── 사람 상세 히어로 ── */
+.hero{display:flex;align-items:center;gap:28px;flex-wrap:wrap;padding:22px 20px;
+  border:1px solid var(--rule);background:var(--panel);border-radius:4px;margin-bottom:12px}
+.hero .stat{font-family:var(--mono);font-size:12.5px;color:var(--dimmer);
+  letter-spacing:.12em;text-transform:uppercase}
+.hero .pid-big{font-family:var(--mono);font-size:32px;font-weight:700;
+  color:var(--text);margin-top:2px}
+.hero .stat b{display:block;font-size:24px;color:var(--text);font-weight:600;
+  margin-top:3px;font-variant-numeric:tabular-nums}
+.visitbadge{padding:5px 13px;border-radius:3px;font-family:var(--mono);font-size:13px;
+  letter-spacing:.08em;font-weight:600;white-space:nowrap}
+.visitbadge.first{background:#1c3f4a;color:var(--calm)}
+.visitbadge.returning{background:#264d33;color:var(--ok)}

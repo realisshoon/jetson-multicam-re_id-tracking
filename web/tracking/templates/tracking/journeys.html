@@ -1,0 +1,364 @@
+{% load static %}<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>이동 목록 · 열정강혁 통합관제</title>
+<link rel="stylesheet" href="{% static 'tracking/journey_pages.css' %}">
+<style>
+/* 2026-08-14: "리스트 한 줄당 높이를 2칸 정도로, 사진도 그에 맞게" 요청
+   — 사진을 정확히 2배(36x48 -> 72x96)로 키우고, 표 행 세로 패딩도 같이
+   늘려서 행 전체가 넉넉해지게 한다(#review-body/#recent-body 공유). */
+.j-thumb{width:72px;height:96px;object-fit:cover;border-radius:4px;
+  background:#000;border:1px solid var(--rule)}
+.j-thumb-empty{display:grid;place-items:center;font-family:var(--mono);
+  font-size:11px;color:var(--dimmer);width:72px;height:96px;border-radius:4px;
+  background:#000;border:1px solid var(--rule)}
+#review-body td,#recent-body td{padding-top:16px;padding-bottom:16px}
+.pid.pending{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;
+  text-underline-offset:3px}
+.pid.pending:hover{color:var(--calm)}
+.pid.pending.matched{color:var(--ok);font-style:normal;text-decoration:none}
+.status-tag{display:inline-block;padding:2px 9px;border-radius:3px;font-family:var(--mono);
+  font-size:11px;font-weight:600;white-space:nowrap;margin-right:6px}
+.status-tag.confirmed{background:#264d33;color:var(--ok)}
+.status-tag.error{background:#4a2020;color:var(--alert)}
+.status-tag.pending{background:var(--panel-3);color:var(--dimmer)}
+.btn-undo{font-size:11px;padding:2px 8px;border-radius:3px;cursor:pointer;
+  border:1px solid var(--rule-2);background:none;color:var(--dimmer);transition:.14s}
+.btn-undo:hover{color:var(--alert);border-color:var(--alert)}
+.btn-del{font-size:11px;padding:2px 8px;border-radius:3px;cursor:pointer;
+  border:1px solid var(--rule-2);background:none;color:var(--dimmer);transition:.14s;
+  white-space:nowrap}
+.btn-del:hover{color:var(--alert);border-color:var(--alert);background:#3a1c1c}
+
+/* ── 인물 검색 후보 모달(미등록자 감지 기록과 동일) ────────────────── */
+.review-modal{position:fixed;inset:0;z-index:100;display:flex;
+  align-items:center;justify-content:center}
+.review-modal[hidden]{display:none}
+.review-modal-backdrop{position:absolute;inset:0;background:#000a}
+.review-modal-box{position:relative;width:min(420px,92vw);max-height:80vh;
+  display:flex;flex-direction:column;background:var(--panel);
+  border:1px solid var(--rule);border-radius:6px;box-shadow:0 20px 50px #000a;
+  overflow:hidden}
+.review-modal-head{display:flex;align-items:center;justify-content:space-between;
+  padding:12px 14px;border-bottom:1px solid var(--rule);font-size:14px;font-weight:600}
+.review-modal-head button{background:none;border:none;color:var(--dim);
+  font-size:16px;cursor:pointer;line-height:1}
+.review-modal-head button:hover{color:var(--text)}
+.review-modal-search{margin:10px 14px 0;padding:8px 10px;background:var(--panel-3);
+  border:1px solid var(--rule-2);border-radius:3px;color:var(--text);font-size:13.5px}
+.review-modal-list{flex:1;overflow-y:auto;padding:10px 14px;min-height:120px;
+  display:flex;flex-direction:column;gap:6px}
+.review-cand{display:flex;align-items:center;gap:10px;padding:6px 8px;
+  border-radius:4px;cursor:pointer;border:1px solid transparent;background:var(--panel-2)}
+.review-cand:hover{border-color:var(--calm)}
+.review-cand img,.review-cand-noimg{width:36px;height:48px;object-fit:cover;
+  border-radius:3px;background:#000;border:1px solid var(--rule);flex:0 0 auto}
+.review-cand-noimg{display:grid;place-items:center;font-family:var(--mono);
+  font-size:7px;color:var(--dimmer)}
+.review-cand-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+.review-cand-id{font-family:var(--mono);font-weight:700;font-size:13.5px;color:var(--text)}
+.review-cand-meta{font-family:var(--mono);font-size:11px;color:var(--dimmer)}
+.review-modal-manual{display:flex;align-items:center;gap:8px;padding:12px 14px;
+  border-top:1px solid var(--rule);flex-wrap:wrap;font-size:12px;color:var(--dim)}
+.review-modal-manual input{flex:1;min-width:100px;background:#000;
+  border:1px solid var(--calm);color:var(--text);padding:6px 8px;border-radius:3px;
+  font-family:var(--mono);font-size:12.5px}
+.review-modal-manual button{flex:0 0 auto;font-size:12.5px;padding:6px 12px;
+  border-radius:3px;cursor:pointer;border:1px solid var(--rule-2);
+  background:var(--panel-3);color:var(--dim);transition:.14s}
+.review-modal-manual button:hover{color:var(--text);border-color:var(--calm)}
+
+/* ── 삭제 확인 모달 ── */
+.confirm-box{width:min(380px,92vw)}
+.confirm-body{padding:16px 14px 4px}
+.confirm-warn{margin:0 0 8px;color:var(--alert);font-weight:700;font-size:14.5px;line-height:1.5}
+.confirm-sub{margin:0;color:var(--dimmer);font-size:12px;line-height:1.5}
+.confirm-actions{display:flex;justify-content:flex-end;gap:8px;padding:14px}
+.confirm-actions button{font-size:13px;padding:7px 16px;border-radius:3px;cursor:pointer;
+  border:1px solid var(--rule-2);background:var(--panel-3);color:var(--text);transition:.14s}
+.btn-confirm-cancel:hover{border-color:var(--calm);color:var(--calm)}
+.btn-confirm-delete{border-color:var(--alert);color:var(--alert)}
+.btn-confirm-delete:hover{background:#3a1c1c}
+</style>
+</head>
+<body>
+{% csrf_token %}
+
+<div class="bar">
+  <div class="brand"><a href="{% url 'dashboard' %}" title="대시보드"><img class="brand-logo"
+    src="{% static 'tracking/logo_ver2.png' %}" alt="WOODIGANI"></a></div>
+  <div class="page-title">현재 · 최근 이동 목록</div>
+  <div class="spacer"></div>
+  <a class="back-link" href="{% url 'dashboard' %}">← 대시보드</a>
+</div>
+
+<section class="panel review" id="review-panel" hidden>
+  <h2>검토 필요 <span id="review-count">0</span></h2>
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>사진</th><th>Journey</th><th>인물 지정</th><th>상태</th><th>후보 UID</th><th>최종 후보 UID</th>
+      <th>초기 판정</th><th class="num">Final Score</th>
+      <th>경로</th><th>진입 시각</th><th>삭제</th>
+    </tr></thead>
+    <tbody id="review-body"></tbody>
+  </table>
+  </div>
+  <p class="note">Final Identity Review 가 확정되지 않은 여정이다 — 임시 UID 는 최종 Person ID
+    가 아니다. "인물 지정" 칸을 클릭하면 사진 후보 모달로 실제 인물을 찾아 로컬에 매칭해둘 수
+    있다(메인 서버의 공식 판정 자체를 바꾸진 않는다 — 메인이 나중에 확정하면 그 결과로 갱신된다).</p>
+</section>
+
+<section class="panel">
+  <h2>현재 · 최근 이동 목록 <span id="recent-count">0</span></h2>
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>사진</th><th>Journey</th><th>Person ID</th><th>인물 상태</th><th>여정 상태</th><th>경로</th>
+      <th>진입 시각</th><th>D 이탈</th><th class="num">소요(초)</th>
+      <th class="num">방문 횟수</th><th>판정</th><th>삭제</th>
+    </tr></thead>
+    <tbody id="recent-body"><tr><td colspan="12" class="empty">불러오는 중…</td></tr></tbody>
+  </table>
+  </div>
+</section>
+
+<div class="review-modal" id="review-modal" hidden>
+  <div class="review-modal-backdrop"></div>
+  <div class="review-modal-box">
+    <div class="review-modal-head">
+      <span>실제 인물 선택</span>
+      <button type="button" class="review-modal-close" aria-label="닫기">✕</button>
+    </div>
+    <input type="text" class="review-modal-search" placeholder="person_uid 또는 이름 검색…">
+    <div class="review-modal-list"></div>
+    <div class="review-modal-manual">
+      <span>목록에 없으면 직접 입력:</span>
+      <input type="text" class="review-modal-manual-input" placeholder="예: P000006">
+      <button type="button" class="review-modal-manual-go">연결</button>
+    </div>
+  </div>
+</div>
+
+<div class="review-modal" id="delete-confirm-modal" hidden>
+  <div class="review-modal-backdrop"></div>
+  <div class="review-modal-box confirm-box">
+    <div class="review-modal-head">
+      <span>이동 기록 삭제</span>
+      <button type="button" class="review-modal-close" aria-label="닫기">✕</button>
+    </div>
+    <div class="confirm-body">
+      <p class="confirm-warn">삭제하시겠습니까? 복구가 안됩니다 신중하게 진행하세요.</p>
+      <p class="confirm-sub">이 목록에서만 지워진다 — 메인 서버가 계속 이 여정을 갖고 있으면 다음 동기화 때 다시 나타날 수 있다.</p>
+    </div>
+    <div class="confirm-actions">
+      <button type="button" class="btn-confirm-cancel">취소</button>
+      <button type="button" class="btn-confirm-delete">삭제</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s){return String(s??'').replace(/[&<>"]/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function fmtSec(v){ return (v==null) ? '—' : Number(v).toFixed(1); }
+function badge(kind, label){
+  if(!kind) return '—';
+  return `<span class="badge ${esc(kind)}">${esc(label || kind)}</span>`;
+}
+function personCell(j){
+  if(j.person_uid) return `<a class="pid" href="/persons/${encodeURIComponent(j.person_uid)}/">${esc(j.person_uid)}</a>`;
+  return `<span class="pid pending">검토중</span>`;
+}
+function thumbCell(j){
+  return j.thumb_url
+    ? `<img class="j-thumb" src="${esc(j.thumb_url)}" alt="" loading="lazy">`
+    : `<div class="j-thumb-empty">NO IMG</div>`;
+}
+const CSRF = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+async function poll(){
+  let d;
+  try{ d = await (await fetch('/api/journeys/')).json(); }
+  catch(e){ return; }
+
+  const reviewPanel = document.getElementById('review-panel');
+  const reviewBody  = document.getElementById('review-body');
+  document.getElementById('review-count').textContent = d.manual_review.length;
+  if(d.manual_review.length){
+    reviewPanel.hidden = false;
+    reviewBody.innerHTML = d.manual_review.map(j => {
+      const matched = j.local_match_person_uid;
+      const pidHTML = `<span class="pid pending${matched ? ' matched' : ''}" data-jid="${esc(j.journey_id)}"
+        title="클릭해서 실제 인물 지정">${matched ? '검토 필요 → '+esc(matched) : '검토 필요'}</span>`;
+      const statusHTML = j.review_status
+        ? `<span class="status-tag ${esc(j.review_status)}">${esc(j.review_status_label)}</span>
+           <button type="button" class="btn-undo" data-jid="${esc(j.journey_id)}">취소</button>`
+        : `<span class="status-tag pending">대기</span>`;
+      return `
+      <tr>
+        <td>${thumbCell(j)}</td>
+        <td class="mono">${esc(j.journey_id)}</td>
+        <td>${pidHTML}</td>
+        <td>${statusHTML}</td>
+        <td class="mono">${esc(j.candidate_person_uid) || '—'}</td>
+        <td class="mono">${esc(j.final_candidate_person_uid) || '—'}</td>
+        <td>${esc(j.initial_decision) || '—'}</td>
+        <td class="num">${j.final_score != null ? Number(j.final_score).toFixed(3) : '—'}</td>
+        <td class="mono">${esc(j.route) || '—'}</td>
+        <td class="num">${esc(j.entry_at) || '—'}</td>
+        <td><button type="button" class="btn-del" data-jid="${esc(j.journey_id)}">삭제</button></td>
+      </tr>`;
+    }).join('');
+  } else {
+    reviewPanel.hidden = true;
+  }
+
+  const recentBody = document.getElementById('recent-body');
+  document.getElementById('recent-count').textContent = d.recent.length;
+  recentBody.innerHTML = d.recent.length ? d.recent.map(j => `
+    <tr>
+      <td>${thumbCell(j)}</td>
+      <td class="mono">${esc(j.journey_id)}</td>
+      <td>${personCell(j)}</td>
+      <td>${esc(j.person_status) || '—'}</td>
+      <td>${esc(j.journey_status) || '—'}</td>
+      <td class="mono">${esc(j.route) || '—'}</td>
+      <td class="num">${esc(j.entry_at) || '—'}</td>
+      <td class="num">${esc(j.d_exit_at) || '—'}</td>
+      <td class="num">${fmtSec(j.journey_elapsed_seconds)}</td>
+      <td class="num">${j.visit_count ?? '—'}</td>
+      <td>${badge(j.final_review_result, j.final_review_result_label)}</td>
+      <td><button type="button" class="btn-del" data-jid="${esc(j.journey_id)}">삭제</button></td>
+    </tr>`).join('') : '<tr><td colspan="12" class="empty">아직 이동 기록이 없다.</td></tr>';
+}
+poll(); setInterval(poll, 2000);
+
+/* ── 삭제 확인 모달(Promise 로 취소/삭제 선택을 돌려준다) ── */
+const deleteConfirmModal = document.getElementById('delete-confirm-modal');
+let deleteConfirmResolve = null;
+function openDeleteConfirm(){
+  deleteConfirmModal.hidden = false;
+  return new Promise(resolve => { deleteConfirmResolve = resolve; });
+}
+function closeDeleteConfirm(result){
+  deleteConfirmModal.hidden = true;
+  if(deleteConfirmResolve){ deleteConfirmResolve(result); deleteConfirmResolve = null; }
+}
+deleteConfirmModal.querySelector('.review-modal-close').onclick = () => closeDeleteConfirm(false);
+deleteConfirmModal.querySelector('.review-modal-backdrop').onclick = () => closeDeleteConfirm(false);
+deleteConfirmModal.querySelector('.btn-confirm-cancel').onclick = () => closeDeleteConfirm(false);
+deleteConfirmModal.querySelector('.btn-confirm-delete').onclick = () => closeDeleteConfirm(true);
+
+async function reviewJourney(jid, status, personUid){
+  const body = new URLSearchParams({status, ...(personUid ? {person_uid: personUid} : {})});
+  const res = await fetch(`/api/journeys/${encodeURIComponent(jid)}/review/`, {
+    method: 'POST', headers: {'X-CSRFToken': CSRF}, body,
+  });
+  if(res.status === 302 || res.redirected){ location.href = '/admin/login/?next=/journeys/'; return {ok:false}; }
+  return res.json();
+}
+
+async function deleteJourney(jid){
+  const proceed = await openDeleteConfirm();
+  if(!proceed) return false;
+  let r;
+  try{
+    r = await (await fetch(`/api/journeys/${encodeURIComponent(jid)}/delete/`, {
+      method: 'POST', headers: {'X-CSRFToken': CSRF},
+    })).json();
+  } catch(e){ alert('삭제 실패'); return false; }
+  if(!r.ok){ alert(r.error || '삭제 실패'); return false; }
+  return true;
+}
+
+/* ── 검토 필요 행 클릭 → 사진 후보 모달로 로컬 매칭(대시보드와 동일 흐름) ── */
+document.getElementById('review-body').addEventListener('click', async ev => {
+  const delBtn = ev.target.closest('.btn-del');
+  if(delBtn){
+    if(await deleteJourney(delBtn.dataset.jid)) poll();
+    return;
+  }
+  const undoBtn = ev.target.closest('.btn-undo');
+  if(undoBtn){
+    const r = await reviewJourney(undoBtn.dataset.jid, 'pending');
+    if(r.ok) poll(); else alert(r.error || '취소 실패');
+    return;
+  }
+  const pid = ev.target.closest('.pid.pending');
+  if(!pid) return;
+  const jid = pid.dataset.jid;
+  if(!jid) return;
+  const uid = await openReviewModal();
+  if(!uid) return;
+  const r = await reviewJourney(jid, 'error', uid);
+  if(!r.ok){ alert(r.error || '연결 실패'); return; }
+  poll();
+});
+
+document.getElementById('recent-body').addEventListener('click', async ev => {
+  const delBtn = ev.target.closest('.btn-del');
+  if(!delBtn) return;
+  if(await deleteJourney(delBtn.dataset.jid)) poll();
+});
+
+/* ── 인물 검색 후보 모달(§api_person_search, 미등록자 감지 기록과 동일 로직) ── */
+const reviewModal       = document.getElementById('review-modal');
+const reviewModalList   = reviewModal.querySelector('.review-modal-list');
+const reviewModalSearch = reviewModal.querySelector('.review-modal-search');
+const reviewModalManual = reviewModal.querySelector('.review-modal-manual-input');
+let reviewModalResolve  = null;
+
+function openReviewModal(){
+  reviewModal.hidden = false;
+  reviewModalSearch.value = '';
+  reviewModalManual.value = '';
+  loadReviewCandidates('');
+  reviewModalSearch.focus();
+  return new Promise(resolve => { reviewModalResolve = resolve; });
+}
+function closeReviewModal(result){
+  reviewModal.hidden = true;
+  if(reviewModalResolve){ reviewModalResolve(result); reviewModalResolve = null; }
+}
+async function loadReviewCandidates(q){
+  reviewModalList.innerHTML = '<p class="empty">불러오는 중…</p>';
+  let data;
+  try{ data = await (await fetch(`/api/persons/search/?q=${encodeURIComponent(q)}`)).json(); }
+  catch(e){ reviewModalList.innerHTML = '<p class="empty">불러오기 실패</p>'; return; }
+  if(!data.results.length){
+    reviewModalList.innerHTML = '<p class="empty">비슷한 인물이 없다 — 아래에서 직접 입력.</p>';
+    return;
+  }
+  reviewModalList.innerHTML = data.results.map(p => `
+    <div class="review-cand" data-uid="${esc(p.person_uid)}">
+      ${p.thumb_url ? `<img src="${esc(p.thumb_url)}" alt="" loading="lazy">`
+                    : '<div class="review-cand-noimg">NO IMG</div>'}
+      <div class="review-cand-info">
+        <span class="review-cand-id">${esc(p.person_uid)}</span>
+        <span class="review-cand-meta">${p.label ? esc(p.label)+' · ' : ''}방문 ${p.visit_count}회${p.confirmed ? ' · 등록됨' : ''}</span>
+      </div>
+    </div>`).join('');
+  reviewModalList.querySelectorAll('.review-cand').forEach(el => {
+    el.onclick = () => closeReviewModal(el.dataset.uid);
+  });
+}
+let reviewSearchTimer = null;
+reviewModalSearch.oninput = () => {
+  clearTimeout(reviewSearchTimer);
+  reviewSearchTimer = setTimeout(() => loadReviewCandidates(reviewModalSearch.value.trim()), 200);
+};
+reviewModal.querySelector('.review-modal-close').onclick = () => closeReviewModal(null);
+reviewModal.querySelector('.review-modal-backdrop').onclick = () => closeReviewModal(null);
+reviewModal.querySelector('.review-modal-manual-go').onclick = () => {
+  const v = reviewModalManual.value.trim();
+  closeReviewModal(v || null);
+};
+reviewModalManual.onkeydown = e => {
+  if(e.key === 'Enter') reviewModal.querySelector('.review-modal-manual-go').click();
+};
+</script>
+</body>
+</html>

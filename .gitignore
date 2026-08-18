@@ -1,7 +1,6 @@
 # Python 가상환경
 .venv/
-.venv-main/
-.venv310/
+.venv*/
 venv/
 .codex_tmp/
 
@@ -35,15 +34,24 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
 db.sqlite3
+web/db.sqlite3
 data/
 data/*.db
 data/*.sqlite
 data/*.sqlite3
 *.csv
 
-# VS Code
+# Web 정적 파일 및 런타임 로그
+web/staticfiles/
+web/*.log
+web/*.log.err
+
+# VS Code & IDE
 .vscode/
+.idea/
 
 # 모델 및 TensorRT 바이너리는 별도 관리; MANIFEST.md만 Git 추적
 *.pt
@@ -59,10 +67,12 @@ datasets/
 outputs/
 runs/
 logs/
+captures/
 /datasets/
 /logs/
 /outputs/
 /runs/
+/captures/
 
 # 영상 파일
 *.mp4

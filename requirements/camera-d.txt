@@ -1,0 +1,11 @@
+# Camera D (Destination Node) Direct Dependencies
+# Target: Jetson Orin Nano (Python 3.10.12)
+# Node ID: D | Web Port: 8003 | Models: YOLO26n, OSNet FP16
+
+-r jetson-common.txt
+opencv-python==4.8.0.76
+
+# Jetson Platform Dependencies (provisioned via JetPack / system wheels):
+# torch==2.3.0 (JetPack 6 official wheel)
+# torchvision==0.18.0a0+6043bc2
+# tensorrt==10.3.0

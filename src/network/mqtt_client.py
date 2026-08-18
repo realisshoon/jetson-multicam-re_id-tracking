@@ -7,12 +7,21 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
+from src.common.config import load_mqtt_config
 from src.network.mqtt_config import BrokerConfig
 
 
-MQTT_BROKER_HOST = "localhost"
-MQTT_BROKER_PORT = 1883
-MQTT_ENTRY_TOPIC = "cctv/entry"
+try:
+    _MQTT_CONFIG = load_mqtt_config()
+    MQTT_BROKER_HOST = _MQTT_CONFIG.host
+    MQTT_BROKER_PORT = _MQTT_CONFIG.port
+    MQTT_QOS = _MQTT_CONFIG.qos
+except Exception:
+    MQTT_BROKER_HOST = "localhost"
+    MQTT_BROKER_PORT = 1883
+    MQTT_QOS = 1
+
+MQTT_ENTRY_TOPIC = "cctv/events/a/entry"
 
 
 JsonMessageHandler = Callable[[str, dict[str, Any]], None]
@@ -169,16 +178,22 @@ class JsonMqttClient:
 
 
 class MqttPublisher:
+    """Production MQTT Publisher for Camera A entry events."""
+
     def __init__(
         self,
         broker_host: str = MQTT_BROKER_HOST,
         broker_port: int = MQTT_BROKER_PORT,
+        qos: int = MQTT_QOS,
+        client_id: str = "camera-a",
     ) -> None:
         self.broker_host = broker_host
         self.broker_port = broker_port
+        self.qos = qos
 
         self.client = mqtt.Client(
-            mqtt.CallbackAPIVersion.VERSION2
+            mqtt.CallbackAPIVersion.VERSION2,
+            client_id=client_id,
         )
 
         self.connected = False
@@ -214,7 +229,7 @@ class MqttPublisher:
         result = self.client.publish(
             topic=MQTT_ENTRY_TOPIC,
             payload=payload,
-            qos=1,
+            qos=self.qos,
         )
 
         result.wait_for_publish()

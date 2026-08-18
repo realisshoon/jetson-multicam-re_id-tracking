@@ -1,0 +1,166 @@
+"""
+Django settings — jetson-multicam-reid 관리자 대시보드
+"""
+import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------- 기본
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-change-me")
+DEBUG = os.environ.get("DJANGO_DEBUG", "1") == "1"
+
+# @login_required 가 로그인 안 된 사용자를 여기로 보낸다. 기본값(/accounts/login/)은
+# 이 프로젝트에 없는 경로라 404가 났었다 — admin 로그인 페이지로 보내도록 지정.
+LOGIN_URL = "/admin/login/"
+
+# 이 서버(대시보드) 자신이 응답할 주소 목록 — 접속하는 사람들의 IP가 아니라
+# 이 PC 자신의 IP/호스트명이다. 기본값은 지금 확인된 이 PC의 LAN IP.
+# 네트워크가 바뀌면 DJANGO_ALLOWED_HOSTS 환경변수로 덮어쓰면 된다.
+ALLOWED_HOSTS = [
+    h for h in os.environ.get(
+        "DJANGO_ALLOWED_HOSTS", "10.10.20.26,localhost,127.0.0.1"
+    ).split(",") if h
+]
+CSRF_TRUSTED_ORIGINS = [
+    o for o in os.environ.get("DJANGO_CSRF_ORIGINS", "").split(",") if o
+]
+
+INSTALLED_APPS = [
+    # 순서가 두 가지를 동시에 만족해야 한다:
+    # (1) auth 가 tracking 보다 먼저 와야 한다 — admin 자동 등록(autodiscover)이
+    #     INSTALLED_APPS 순서대로 각 앱의 admin.py 를 불러오는데, tracking/admin.py
+    #     가 auth 의 기본 User 등록을 unregister 하고 우리 프록시("사용자관리")로
+    #     바꿔치기하기 때문에, auth.admin 이 먼저 User 를 등록해놔야 한다.
+    # (2) tracking 이 admin 보다는 먼저 와야 한다 — tracking/templates/admin/ 의
+    #     커스텀 템플릿(admin/base_site.html, admin/login.html)이 admin 기본
+    #     템플릿보다 우선 선택되려면 그렇다 (Django 템플릿 조회도 이 순서를 따름).
+    "django.contrib.auth",
+    "tracking",
+    "django.contrib.admin",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    # daphne 는 runserver 와 달리 static 을 자동으로 서빙하지 않는다.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+]
+
+ROOT_URLCONF = "config.urls"
+ASGI_APPLICATION = "config.asgi.application"
+WSGI_APPLICATION = "config.wsgi.application"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
+# ---------------------------------------------------------------- DB
+# tracker_worker.py 와 Django 가 같은 SQLite 를 동시에 쓴다.
+# WAL 모드가 아니면 'database is locked' 로 죽는다. 필수.
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
+        "OPTIONS": {
+            "timeout": 20,
+            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+        },
+    }
+}
+
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+]
+
+LANGUAGE_CODE = "ko-kr"
+TIME_ZONE = "Asia/Seoul"
+USE_I18N = True
+USE_TZ = True
+
+STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND":
+        "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
+
+MEDIA_URL = "media/"
+MEDIA_ROOT = BASE_DIR / "media"          # 크롭 이미지 저장 위치
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# ---------------------------------------------------------------- 프로젝트 설정
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+
+# jetson-multicam-re_id-tracking (별도 네트워크의 Jetson 장비) 연동.
+# 이 레포는 그쪽 코드를 절대 수정하지 않는다 — 그쪽이 이미 만들어 내는
+# 산출물(MQTT cctv/entry 토픽, node_a/node_b 의 MJPEG 스트림)만 읽는다.
+# src/network/mqtt_client.py 의 기본값과 동일한 호스트/포트/토픽.
+JETSON = {
+    # 10.10.20.56 = 실제 YOLO+ByteTrack+Re-ID+MQTT 파이프라인이 도는 Jetson 장비.
+    "MQTT_HOST": os.environ.get("JETSON_MQTT_HOST", "10.10.20.56"),
+    "MQTT_PORT": int(os.environ.get("JETSON_MQTT_PORT", "1883")),
+    "MQTT_TOPIC": os.environ.get("JETSON_MQTT_TOPIC", "cctv/entry"),
+    # node_a.py / node_b.py 가 각각 :8000 / :8001 에서 직접 서빙하는 스트림.
+    "CAM_A_STREAM_URL": os.environ.get(
+        "JETSON_CAM_A_URL", "http://10.10.20.56:8000/stream"),
+    "CAM_B_STREAM_URL": os.environ.get(
+        "JETSON_CAM_B_URL", "http://10.10.20.56:8001/stream"),
+    # Camera C 는 아직 가동 전이라 기본값을 비워둔다 — 대시보드가 빈 슬롯으로
+    # 보여준다. 켜지면 JETSON_CAM_C_URL 환경변수로 채우면 된다.
+    "CAM_C_STREAM_URL": os.environ.get("JETSON_CAM_C_URL", ""),
+    # Camera D 는 node_a/b 와 같은 장비의 :8002 에서 서빙 중.
+    "CAM_D_STREAM_URL": os.environ.get(
+        "JETSON_CAM_D_URL", "http://10.10.20.56:8002/stream"),
+}
+
+# B의 중앙서버(feature/journey-sqlite-e2e 브랜치의 journey_sqlite_server.py 가
+# MQTT cctv/# 를 구독해 쌓는 central_tracking.db)를 읽기 전용으로 연동한다.
+# 그 파일이 실제로 어느 장비의 어느 경로에 있는지는 아직 확정되지 않았다 —
+# 확정되면 CENTRAL_DB_PATH 환경변수로 채우면 바로 연동된다(비어있으면
+# tracking.central_db 의 모든 조회 함수가 조용히 빈 결과를 돌려준다).
+# 이 DB 는 절대 쓰지 않고 읽기만 한다 — 다른 프로세스(journey_sqlite_server.py)
+# 가 계속 쓰고 있는 파일이라 동시 쓰기는 손상 위험이 있다.
+CENTRAL_DB_PATH = os.environ.get("CENTRAL_DB_PATH", "")
+
+# ---------------------------------------------------------------- Main 관리자 API
+# Main(B)의 DB 관리자 API(admin/database/status·backup·reset/*·jobs) 전용 설정.
+# 기존 journeys/persons/captures 조회는 지금처럼 RuntimeConfig.main_server_host/
+# port(관리자가 Django admin에서 편집)를 그대로 쓴다 — 이건 그거랑 별개다.
+# MAIN_ADMIN_TOKEN 은 절대 프론트엔드로 안 나가야 해서 DB(RuntimeConfig)가
+# 아니라 여기 환경변수로만 관리한다: Django admin 화면에도 안 뜨고, 어떤
+# API 응답에도 안 실린다. 비어있으면(미설정) admin-proxy 쪽이 503
+# ADMIN_API_DISABLED 로 응답한다(§tracking/admin_db_proxy.py) — Main을
+# 아예 호출하지 않는다.
+MAIN_API_BASE_URL = os.environ.get("MAIN_API_BASE_URL", "http://10.10.20.33:8080")
+MAIN_ADMIN_TOKEN = os.environ.get("MAIN_ADMIN_TOKEN", "")
+
+TRACKER = {
+    # tracker_worker 가 참고하는 기본값. Camera 모델이 우선한다.
+    "REID_THRESHOLD": 0.55,      # 코사인 유사도 컷
+    "DET_CONF": 0.40,
+    "SNAPSHOTS_PER_TRACKLET": 5, # 트랙렛당 저장할 대표 크롭 수
+    "STREAM_JPEG_QUALITY": 70,
+    "STREAM_WIDTH": 640,
+}

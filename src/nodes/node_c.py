@@ -31,18 +31,18 @@ CAMERA_DEVICE = 0
 WIDTH, HEIGHT, FPS = 1280, 720, 30
 # WIDTH, HEIGHT, FPS = 640, 480, 15
 OUTPUT_WIDTH, OUTPUT_HEIGHT = 1280, 720
-WEB_PORT = 8001
+WEB_PORT = 8002
 FLIP_HORIZONTAL = True
 
-NODE_ID = "B"
+NODE_ID = "C"
 MQTT_CONFIG = load_mqtt_config()
 MQTT_HOST = MQTT_CONFIG.host
 MQTT_PORT = MQTT_CONFIG.port
 MQTT_QOS = MQTT_CONFIG.qos
-CANDIDATE_TOPIC = "cctv/candidates/b"
-PASSAGE_TOPIC = "cctv/events/b/passage"
+CANDIDATE_TOPIC = "cctv/candidates/c"
+PASSAGE_TOPIC = "cctv/events/c/passage"
 
-CAPTURE_ROOT = ROOT / "outputs" / "captures" / "B"
+CAPTURE_ROOT = ROOT / "outputs" / "captures" / "C"
 
 # A와 동일하게 아주 약한 밝기/대비 보정
 IMAGE_CONTRAST_ALPHA = 1.02
@@ -56,8 +56,8 @@ VERIFY_FAILURE_LIMIT = 2
 REID_INTERVAL_FRAMES = 3
 REID_HISTORY_SIZE = 5
 
-B_GALLERY_TARGET = 2
-B_GALLERY_MAX = 2
+C_GALLERY_TARGET = 2
+C_GALLERY_MAX = 2
 TEMPORAL_WINDOW_SIZE = 3
 TEMPORAL_CANDIDATE_BANK_MAX = 6
 OBSERVED_SAMPLE_HISTORY_MAX = 120
@@ -65,7 +65,7 @@ GALLERY_MIN_FRAME_GAP = 10
 GALLERY_DUPLICATE_THRESHOLD = 0.999
 PASSAGE_MIN_VERIFY_SUCCESSES = 2
 PASSAGE_MIN_REID_SAMPLES = 2
-B_PASSAGE_MIN_QUALITY = float(os.getenv("B_PASSAGE_MIN_QUALITY", "0.70"))
+C_PASSAGE_MIN_QUALITY = float(os.getenv("C_PASSAGE_MIN_QUALITY", "0.70"))
 PASSAGE_MIN_BEST_SCORE = 0.75
 PASSAGE_MIN_TOPK_SCORE = 0.68
 PASSAGE_MIN_COMBINED_SCORE = 0.72
@@ -85,11 +85,11 @@ LOG_DIR = ROOT / "logs"
 REVISIT_RUN_ID = os.getenv(
     "REVISIT_RUN_ID", datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
 )
-REVISIT_LOG = LOG_DIR / "revisit" / REVISIT_RUN_ID / "camera_b_revisit.jsonl"
-CANDIDATE_CSV = LOG_DIR / "node_b_candidates.csv"
-MATCH_CSV = LOG_DIR / "node_b_matches.csv"
-PASSAGE_CSV = LOG_DIR / "node_b_passages.csv"
-PASSAGE_DIAGNOSTICS_JSONL = LOG_DIR / "node_b_passage_diagnostics.jsonl"
+REVISIT_LOG = LOG_DIR / "revisit" / REVISIT_RUN_ID / "camera_c_revisit.jsonl"
+CANDIDATE_CSV = LOG_DIR / "node_c_candidates.csv"
+MATCH_CSV = LOG_DIR / "node_c_matches.csv"
+PASSAGE_CSV = LOG_DIR / "node_c_passages.csv"
+PASSAGE_DIAGNOSTICS_JSONL = LOG_DIR / "node_c_passage_diagnostics.jsonl"
 
 latest_jpeg: bytes | None = None
 frame_lock = threading.Lock()
@@ -125,26 +125,26 @@ def build_passage_payload(
     person_uid: str,
     entry_timestamp: str,
     incoming_gallery: list[dict[str, Any]],
-    b_embeddings: list[np.ndarray],
+    c_embeddings: list[np.ndarray],
     a_local_track_id: int | str,
-    b_local_track_id: int,
-    b_passage_timestamp: str,
+    c_local_track_id: int,
+    c_passage_timestamp: str,
     selected_wire_samples: list[dict[str, Any]],
 ) -> dict[str, Any]:
     gallery = [dict(item) for item in incoming_gallery]
-    if len(selected_wire_samples) != len(b_embeddings):
-        raise ValueError("B Gallery와 선택된 집계 표본 수가 일치하지 않습니다.")
+    if len(selected_wire_samples) != len(c_embeddings):
+        raise ValueError("C Gallery와 선택된 집계 표본 수가 일치하지 않습니다.")
     gallery.extend(
         make_gallery_entry(
-            "B",
+            "C",
             embedding,
-            b_passage_timestamp,
+            c_passage_timestamp,
             quality=float(sample["quality"]),
         )
-        for embedding, sample in zip(b_embeddings, selected_wire_samples)
+        for embedding, sample in zip(c_embeddings, selected_wire_samples)
     )
-    if not b_embeddings:
-        raise ValueError("B 특징값이 하나 이상 필요합니다.")
+    if not c_embeddings:
+        raise ValueError("C 특징값이 하나 이상 필요합니다.")
     diagnostics = calculate_gallery_diagnostics(gallery)
     return {
         "schema_version": 1,
@@ -152,13 +152,13 @@ def build_passage_payload(
         "journey_id": journey_id,
         "person_uid": person_uid,
         "global_person_id": person_uid,
-        "current_node": "B",
-        "route": ["A", "B"],
+        "current_node": "C",
+        "route": ["A", "C"],
         "next_nodes": ["D"],
         "entry_timestamp": entry_timestamp,
-        "b_passage_timestamp": b_passage_timestamp,
+        "c_passage_timestamp": c_passage_timestamp,
         "a_local_track_id": a_local_track_id,
-        "b_local_track_id": b_local_track_id,
+        "c_local_track_id": c_local_track_id,
         "gallery_count": len(gallery),
         "gallery": gallery,
         **diagnostics,
@@ -168,28 +168,28 @@ def build_passage_payload(
 def calculate_gallery_diagnostics(gallery: list[dict[str, Any]]) -> dict[str, Any]:
     """Recalculate Main's scores only from the embeddings that go on the wire."""
     a_entries = [item for item in gallery if item.get("node_id") == "A"]
-    b_entries = [
+    c_entries = [
         item for item in gallery
-        if item.get("node_id") == "B"
-        and float(item.get("quality", -1.0)) >= B_PASSAGE_MIN_QUALITY
+        if item.get("node_id") == "C"
+        and float(item.get("quality", -1.0)) >= C_PASSAGE_MIN_QUALITY
     ]
     if not a_entries:
         raise ValueError("최종 payload에 Main A Gallery가 없습니다.")
-    if len(b_entries) < PASSAGE_MIN_REID_SAMPLES:
-        raise ValueError("최종 payload의 유효 B Gallery가 부족합니다.")
+    if len(c_entries) < PASSAGE_MIN_REID_SAMPLES:
+        raise ValueError("최종 payload의 유효 C Gallery가 부족합니다.")
 
     a_embeddings = np.stack([
         np.asarray(item["embedding"], dtype=np.float32) for item in a_entries
     ])
-    b_embeddings = np.stack([
-        np.asarray(item["embedding"], dtype=np.float32) for item in b_entries
+    c_embeddings = np.stack([
+        np.asarray(item["embedding"], dtype=np.float32) for item in c_entries
     ])
-    if a_embeddings.shape[1:] != (512,) or b_embeddings.shape[1:] != (512,):
+    if a_embeddings.shape[1:] != (512,) or c_embeddings.shape[1:] != (512,):
         raise ValueError("최종 payload Gallery embedding_dim은 512여야 합니다.")
-    if not np.all(np.isfinite(a_embeddings)) or not np.all(np.isfinite(b_embeddings)):
+    if not np.all(np.isfinite(a_embeddings)) or not np.all(np.isfinite(c_embeddings)):
         raise ValueError("최종 payload Gallery에 NaN/Inf가 있습니다.")
 
-    matrix = b_embeddings @ a_embeddings.T
+    matrix = c_embeddings @ a_embeddings.T
     per_frame_best = matrix.max(axis=1)
     flattened = np.sort(matrix.reshape(-1))[::-1]
     topk_values = flattened[:min(PERSON_TOPK, flattened.size)]
@@ -202,7 +202,7 @@ def calculate_gallery_diagnostics(gallery: list[dict[str, Any]]) -> dict[str, An
     consistency_count = int(np.sum(
         per_frame_best >= PERSON_REVIEW_COMBINED_THRESHOLD
     ))
-    qualities = [float(item["quality"]) for item in b_entries]
+    qualities = [float(item["quality"]) for item in c_entries]
     final_quality = float(np.mean(qualities))
     return {
         "per_frame_best_scores": [float(value) for value in per_frame_best],
@@ -211,22 +211,22 @@ def calculate_gallery_diagnostics(gallery: list[dict[str, Any]]) -> dict[str, An
         "combined_score": float(combined_score),
         "multiframe_consistency": int(consistency_count),
         "consistency_count": int(consistency_count),
-        "multiframe_consistency_ratio": float(consistency_count / len(b_entries)),
+        "multiframe_consistency_ratio": float(consistency_count / len(c_entries)),
         "quality_samples": qualities,
         "final_quality": final_quality,
         "final_similarity": float(combined_score),
-        "gallery_sample_count": len(b_entries),
+        "gallery_sample_count": len(c_entries),
     }
 
 
-def validate_b_passage_evidence(
+def validate_c_passage_evidence(
     gallery: list[dict[str, Any]],
 ) -> tuple[bool, str, dict[str, Any] | None]:
     """Apply the same evidence contract as Main before C publishes PASSAGE."""
     selected_entries = [
         item for item in gallery
-        if item.get("node_id") == "B"
-        and float(item.get("quality", -1.0)) >= B_PASSAGE_MIN_QUALITY
+        if item.get("node_id") == "C"
+        and float(item.get("quality", -1.0)) >= C_PASSAGE_MIN_QUALITY
     ]
     if len(selected_entries) < PASSAGE_MIN_REID_SAMPLES:
         return False, "INSUFFICIENT_QUALITY", None
@@ -377,7 +377,7 @@ def save_match_capture(
     target_dir.mkdir(parents=True, exist_ok=True)
 
     filename = (
-        f"B_{captured_at.strftime('%H%M%S_%f')}_"
+        f"C_{captured_at.strftime('%H%M%S_%f')}_"
         f"L{local_id}_S{score:.3f}.jpg"
     )
     capture_path = target_dir / filename
@@ -389,7 +389,7 @@ def save_match_capture(
     )
     if not success:
         raise RuntimeError(
-            f"B Capture 저장 실패: {capture_path}"
+            f"C Capture 저장 실패: {capture_path}"
         )
 
     return str(capture_path)
@@ -399,8 +399,8 @@ def ensure_csv() -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     files = [
         (CANDIDATE_CSV, ["received_at", "entry_timestamp", "journey_id", "a_local_id", "status"]),
-        (MATCH_CSV, ["matched_at", "b_local_id", "journey_id", "similarity", "status"]),
-        (PASSAGE_CSV, ["published_at", "topic", "journey_id", "b_local_id", "b_gallery", "total_gallery", "status"]),
+        (MATCH_CSV, ["matched_at", "c_local_id", "journey_id", "similarity", "status"]),
+        (PASSAGE_CSV, ["published_at", "topic", "journey_id", "c_local_id", "c_gallery", "total_gallery", "status"]),
     ]
     for path, header in files:
         if not path.exists():
@@ -433,7 +433,7 @@ def log_revisit_event(
         "at": now_iso(),
         "run_id": REVISIT_RUN_ID,
         "event": event,
-        "node": "B",
+        "node": "C",
         "request_id": request_id,
         "journey_id": journey_id,
         "person_uid": person_uid,
@@ -484,7 +484,7 @@ def save_candidate(payload: dict[str, Any]) -> None:
                 "quality": item.get("quality") if isinstance(item, dict) else None,
             })
     log_revisit_event(
-        "B_CANDIDATE_RECEIVED",
+        "C_CANDIDATE_RECEIVED",
         request_id=request_id,
         journey_id=journey_id,
         person_uid=person_uid or None,
@@ -502,14 +502,14 @@ def save_candidate(payload: dict[str, Any]) -> None:
         or not gallery
     ):
         log_revisit_event(
-            "B_CANDIDATE_ACTIVATED",
+            "C_CANDIDATE_ACTIVATED",
             request_id=request_id,
             journey_id=journey_id,
             person_uid=person_uid or None,
             activated=False,
             reason="INVALID_CANDIDATE_PAYLOAD",
         )
-        print("[B MQTT] 잘못된 Main 후보 메시지")
+        print("[C MQTT] 잘못된 Main 후보 메시지")
         return
 
     validated_gallery: list[dict[str, Any]] = []
@@ -528,7 +528,7 @@ def save_candidate(payload: dict[str, Any]) -> None:
             gallery_embeddings.append(normalized)
     except (TypeError, ValueError) as error:
         log_revisit_event(
-            "B_CANDIDATE_ACTIVATED",
+            "C_CANDIDATE_ACTIVATED",
             request_id=request_id,
             journey_id=journey_id,
             person_uid=person_uid,
@@ -537,7 +537,7 @@ def save_candidate(payload: dict[str, Any]) -> None:
             detail=str(error),
         )
         print(
-            f"[B MQTT] {journey_id}: {error}"
+            f"[C MQTT] {journey_id}: {error}"
         )
         return
 
@@ -572,7 +572,7 @@ def save_candidate(payload: dict[str, Any]) -> None:
         "incoming_gallery": validated_gallery,
 
         "status": "PENDING",
-        "matched_b_local_id": None,
+        "matched_c_local_id": None,
         "match_score": None,
         "passage_published": False,
     }
@@ -592,7 +592,7 @@ def save_candidate(payload: dict[str, Any]) -> None:
             }
         ):
             log_revisit_event(
-                "B_CANDIDATE_ACTIVATED",
+                "C_CANDIDATE_ACTIVATED",
                 request_id=request_id,
                 journey_id=journey_id,
                 person_uid=person_uid,
@@ -600,7 +600,7 @@ def save_candidate(payload: dict[str, Any]) -> None:
                 reason="DUPLICATE_ACTIVE_CANDIDATE",
             )
             print(
-                f"[B 중복 후보 무시] "
+                f"[C 중복 후보 무시] "
                 f"{journey_id}"
             )
             return
@@ -608,7 +608,7 @@ def save_candidate(payload: dict[str, Any]) -> None:
         candidates[journey_id] = candidate
 
     log_revisit_event(
-        "B_CANDIDATE_ACTIVATED",
+        "C_CANDIDATE_ACTIVATED",
         request_id=request_id,
         journey_id=journey_id,
         person_uid=person_uid,
@@ -628,7 +628,7 @@ def save_candidate(payload: dict[str, Any]) -> None:
     )
 
     print()
-    print("===== B Main 후보 수신 =====")
+    print("===== C Main 후보 수신 =====")
     print(f"Person UID    : {person_uid}")
     print(f"Journey ID    : {journey_id}")
     print(f"Stage         : {stage}")
@@ -692,7 +692,7 @@ def mark_matched(journey_id: str, local_id: int, score: float) -> bool:
         if item is None or item["status"] != "PENDING":
             return False
         item["status"] = "MATCHED"
-        item["matched_b_local_id"] = local_id
+        item["matched_c_local_id"] = local_id
         item["match_score"] = score
         return True
 
@@ -710,15 +710,15 @@ def mark_track_rejected(journey_id: str, local_id: int, reason: str) -> None:
     person_uid: str | None = None
     with candidate_lock:
         item = candidates.get(journey_id)
-        if item is None or item.get("matched_b_local_id") not in {None, local_id}:
+        if item is None or item.get("matched_c_local_id") not in {None, local_id}:
             return
         request_id = item.get("request_id")
         person_uid = item.get("person_uid")
         item["status"] = reason
-        item["matched_b_local_id"] = None
+        item["matched_c_local_id"] = None
         item["match_score"] = None
     log_revisit_event(
-        "B_TRACK_CLEANUP",
+        "C_TRACK_CLEANUP",
         request_id=request_id,
         journey_id=journey_id,
         person_uid=person_uid,
@@ -726,9 +726,9 @@ def mark_track_rejected(journey_id: str, local_id: int, reason: str) -> None:
         reason="TRACK_LOST",
         final_status=reason,
     )
-    print("\n===== B Track 최종 판정 =====")
+    print("\n===== C Track 최종 판정 =====")
     print(f"Journey ID: {journey_id}")
-    print(f"B Local ID: {local_id}")
+    print(f"C Local ID: {local_id}")
     print(f"Status    : {reason}")
     print("============================")
 
@@ -743,7 +743,7 @@ def release_candidate(journey_id: str, local_id: int, reason: str) -> None:
             return
         request_id = item.get("request_id")
         person_uid = item.get("person_uid")
-        if item.get("matched_b_local_id") not in {None, local_id}:
+        if item.get("matched_c_local_id") not in {None, local_id}:
             return
 
         passed = bool(item["passage_published"])
@@ -754,13 +754,13 @@ def release_candidate(journey_id: str, local_id: int, reason: str) -> None:
         else:
             item["status"] = "EXPIRED"
 
-        item["matched_b_local_id"] = None
+        item["matched_c_local_id"] = None
         if not passed:
             item["match_score"] = None
         final_status = item["status"]
 
     log_revisit_event(
-        "B_TRACK_CLEANUP",
+        "C_TRACK_CLEANUP",
         request_id=request_id,
         journey_id=journey_id,
         person_uid=person_uid,
@@ -769,21 +769,21 @@ def release_candidate(journey_id: str, local_id: int, reason: str) -> None:
         final_status=final_status,
     )
 
-    print("\n===== B Global ID 연결 정리 =====")
+    print("\n===== C Global ID 연결 정리 =====")
     print(f"Journey ID: {journey_id}")
-    print(f"B Local ID: {local_id}")
+    print(f"C Local ID: {local_id}")
     print(f"Reason    : {reason}")
     print(f"Status    : {'PASSED 유지' if passed else '재매칭 가능'}")
     print("================================")
 
 
-def find_best(b_embedding: np.ndarray) -> tuple[str | None, float, float]:
+def find_best(c_embedding: np.ndarray) -> tuple[str | None, float, float]:
     pending = pending_candidates()
     if not pending:
         return None, -1.0, -1.0
 
     scores = [
-        (jid, max(similarity(b_embedding, emb) for emb in gallery))
+        (jid, max(similarity(c_embedding, emb) for emb in gallery))
         for jid, gallery in pending
     ]
     scores.sort(key=lambda item: item[1], reverse=True)
@@ -800,14 +800,14 @@ def try_add_gallery(
     galleries: dict[int, list[np.ndarray]],
     last_gallery_frame: dict[int, int],
 ) -> bool:
-    if quality < B_PASSAGE_MIN_QUALITY:
+    if quality < C_PASSAGE_MIN_QUALITY:
         print(
-            f"[B Gallery 저품질 폐기] Local={local_id}, "
-            f"Quality={quality:.3f}, Required={B_PASSAGE_MIN_QUALITY:.3f}"
+            f"[C Gallery 저품질 폐기] Local={local_id}, "
+            f"Quality={quality:.3f}, Required={C_PASSAGE_MIN_QUALITY:.3f}"
         )
         return False
     gallery = galleries.setdefault(local_id, [])
-    if len(gallery) >= B_GALLERY_MAX:
+    if len(gallery) >= C_GALLERY_MAX:
         return False
     if frame_index - last_gallery_frame.get(local_id, -99999) < GALLERY_MIN_FRAME_GAP:
         return False
@@ -822,8 +822,8 @@ def try_add_gallery(
     gallery.append(embedding.copy())
     last_gallery_frame[local_id] = frame_index
     print(
-        f"[B Gallery 추가] Local={local_id}, "
-        f"Count={len(gallery)}/{B_GALLERY_TARGET}, Quality={quality:.3f}"
+        f"[C Gallery 추가] Local={local_id}, "
+        f"Count={len(gallery)}/{C_GALLERY_TARGET}, Quality={quality:.3f}"
     )
     return True
 
@@ -837,7 +837,7 @@ def add_temporal_candidate(
     candidate_bank: list[dict[str, Any]],
 ) -> bool:
     """Add an observation and finalize one non-overlapping temporal window."""
-    if quality < B_PASSAGE_MIN_QUALITY:
+    if quality < C_PASSAGE_MIN_QUALITY:
         return False
     if any(item["frame_index"] == frame_index for item in window):
         return False
@@ -876,19 +876,19 @@ def add_temporal_candidate(
 def selected_temporal_candidates(
     candidate_bank: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    return candidate_bank[:B_GALLERY_TARGET]
+    return candidate_bank[:C_GALLERY_TARGET]
 
 
 def temporal_candidate_diagnostics(
     incoming_gallery: list[dict[str, Any]],
     selected_candidates: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    if len(selected_candidates) < B_GALLERY_TARGET:
+    if len(selected_candidates) < C_GALLERY_TARGET:
         return None
     gallery = [dict(item) for item in incoming_gallery]
     gallery.extend(
         make_gallery_entry(
-            "B", item["embedding"], now_iso(), quality=item["quality"]
+            "C", item["embedding"], now_iso(), quality=item["quality"]
         )
         for item in selected_candidates
     )
@@ -903,7 +903,7 @@ def finalize_partial_temporal_window(
     """Finalize remaining valid observations in temporal window into a candidate."""
     valid_observations = [
         item for item in window
-        if float(item.get("quality", 0.0)) >= B_PASSAGE_MIN_QUALITY
+        if float(item.get("quality", 0.0)) >= C_PASSAGE_MIN_QUALITY
     ]
     window.clear()
     if not valid_observations:
@@ -946,7 +946,7 @@ def promote_confirmation_observations(
         frame_index = int(seed.get("frame_index", -1))
         if (
             seed.get("candidate_id") != candidate_id
-            or float(seed.get("quality", 0.0)) < B_PASSAGE_MIN_QUALITY
+            or float(seed.get("quality", 0.0)) < C_PASSAGE_MIN_QUALITY
             or frame_index < 0
             or frame_index in seen_frame_indices
         ):
@@ -993,7 +993,7 @@ def publish_passage(
     reference = candidate_reference(journey_id)
     if reference is None:
         log_revisit_event(
-            "B_PASSAGE_DECISION",
+            "C_PASSAGE_DECISION",
             journey_id=journey_id,
             local_track_id=local_id,
             status="FAILED",
@@ -1001,7 +1001,7 @@ def publish_passage(
             valid_samples=0,
             qualities=[],
         )
-        print(f"[B PASSAGE 실패] {journey_id}: A 후보 정보 없음")
+        print(f"[C PASSAGE 실패] {journey_id}: A 후보 정보 없음")
         return False
 
     person_uid = str(reference.get("person_uid") or "UNKNOWN")
@@ -1011,7 +1011,7 @@ def publish_passage(
     if len(gallery) < PASSAGE_MIN_REID_SAMPLES or len(selected_wire_samples) < PASSAGE_MIN_REID_SAMPLES:
         selected_qualities = [float(sample.get("quality", 0.0)) for sample in selected_wire_samples]
         log_revisit_event(
-            "B_PASSAGE_DECISION",
+            "C_PASSAGE_DECISION",
             request_id=request_id,
             journey_id=journey_id,
             person_uid=person_uid,
@@ -1028,22 +1028,22 @@ def publish_passage(
         person_uid=person_uid,
         entry_timestamp=reference["entry_timestamp"],
         incoming_gallery=reference["incoming_gallery"],
-        b_embeddings=gallery[:B_GALLERY_MAX],
+        c_embeddings=gallery[:C_GALLERY_MAX],
         a_local_track_id=reference["a_local_id"],
-        b_local_track_id=local_id,
-        b_passage_timestamp=passage_at,
+        c_local_track_id=local_id,
+        c_passage_timestamp=passage_at,
         selected_wire_samples=selected_wire_samples,
     )
 
-    accepted, reason, diagnostics = validate_b_passage_evidence(payload["gallery"])
+    accepted, reason, diagnostics = validate_c_passage_evidence(payload["gallery"])
     selected_qualities = [
         float(item["quality"])
         for item in payload["gallery"]
-        if item.get("node_id") == "B"
+        if item.get("node_id") == "C"
     ]
     if not accepted:
         log_revisit_event(
-            "B_PASSAGE_DECISION",
+            "C_PASSAGE_DECISION",
             request_id=request_id,
             journey_id=journey_id,
             person_uid=person_uid,
@@ -1059,10 +1059,10 @@ def publish_passage(
                 "journey_id": journey_id, "status": reason,
                 "observed_samples": observed_samples, "payload": payload,
             })
-            print(f"[B PASSAGE 최종 거부] {journey_id}: {reason}")
+            print(f"[C PASSAGE 최종 거부] {journey_id}: {reason}")
         return False
     if diagnostics is None:
-        raise RuntimeError("B PASSAGE 진단값이 없습니다.")
+        raise RuntimeError("C PASSAGE 진단값이 없습니다.")
 
     try:
         capture_path = save_match_capture(
@@ -1073,7 +1073,7 @@ def publish_passage(
             score=match_score,
         )
     except Exception as error:
-        print(f"[B Capture 저장 실패] {error}")
+        print(f"[C Capture 저장 실패] {error}")
         capture_path = ""
 
     # Main Server의 Capture/관리자 DB 기록용 추가 필드
@@ -1087,7 +1087,7 @@ def publish_passage(
     wire_ok, wire_payload, mismatches = verify_wire_payload(payload)
     if not wire_ok:
         log_revisit_event(
-            "B_PASSAGE_DECISION",
+            "C_PASSAGE_DECISION",
             request_id=request_id,
             journey_id=journey_id,
             person_uid=person_uid,
@@ -1106,14 +1106,14 @@ def publish_passage(
             "payload": wire_payload,
         })
         print(
-            f"[B PASSAGE 발행 금지] {journey_id}: "
+            f"[C PASSAGE 발행 금지] {journey_id}: "
             f"LOCAL_WIRE_SCORE_MISMATCH {mismatches}"
         )
         return False
     payload = wire_payload
 
     log_revisit_event(
-        "B_PASSAGE_DECISION",
+        "C_PASSAGE_DECISION",
         request_id=request_id,
         journey_id=journey_id,
         person_uid=person_uid,
@@ -1125,7 +1125,7 @@ def publish_passage(
     )
 
     print(
-        "[B PASSAGE 발행 직전] "
+        "[C PASSAGE 발행 직전] "
         f"journey_id={journey_id}, valid_samples={len(selected_qualities)}, "
         f"qualities={selected_qualities}, best={diagnostics['best_score']:.6f}, "
         f"topk={diagnostics['topk_score']:.6f}, "
@@ -1158,7 +1158,7 @@ def publish_passage(
         "rc": rc,
     }
     log_revisit_event(
-        "B_PASSAGE_PUBLISH",
+        "C_PASSAGE_PUBLISH",
         **publish_context,
         mid=mid,
         puback=False,
@@ -1166,7 +1166,7 @@ def publish_passage(
     if rc == mqtt.MQTT_ERR_SUCCESS:
         pending_passage_pubacks[mid] = publish_context
     if info.rc != mqtt.MQTT_ERR_SUCCESS:
-        print(f"[B PASSAGE 실패] MQTT rc={info.rc}")
+        print(f"[C PASSAGE 실패] MQTT rc={info.rc}")
         return False
 
     mark_passed(journey_id)
@@ -1183,12 +1183,12 @@ def publish_passage(
         ],
     )
 
-    print("\n===== B -> MAIN PASSAGE 발행 =====")
+    print("\n===== C -> MAIN PASSAGE 발행 =====")
     print(f"Person UID    : {person_uid}")
     print(f"Journey ID    : {journey_id}")
-    print(f"B Local ID    : {local_id}")
+    print(f"C Local ID    : {local_id}")
     print(f"Similarity    : {match_score:.6f}")
-    print(f"B Gallery     : {len(gallery)}")
+    print(f"C Gallery     : {len(gallery)}")
     print(f"Total Gallery : {payload['gallery_count']}")
     print(f"Route         : {payload['route']}")
     print(f"Capture       : {capture_path or '저장 실패'}")
@@ -1198,12 +1198,12 @@ def publish_passage(
 
 def on_connect(client, userdata, flags, reason_code, properties) -> None:
     if reason_code != 0:
-        print(f"Camera B MQTT 연결 실패: {reason_code}")
+        print(f"Camera C MQTT 연결 실패: {reason_code}")
         return
-    print(f"Camera B MQTT 연결 완료: {MQTT_HOST}:{MQTT_PORT}")
+    print(f"Camera C MQTT 연결 완료: {MQTT_HOST}:{MQTT_PORT}")
     client.subscribe(CANDIDATE_TOPIC, qos=MQTT_QOS)
-    print(f"Camera B MQTT 구독: {CANDIDATE_TOPIC}")
-    print(f"Camera B MQTT 발행: {PASSAGE_TOPIC}")
+    print(f"Camera C MQTT 구독: {CANDIDATE_TOPIC}")
+    print(f"Camera C MQTT 발행: {PASSAGE_TOPIC}")
 
 
 def on_message(client, userdata, message) -> None:
@@ -1216,7 +1216,7 @@ def on_message(client, userdata, message) -> None:
         json.JSONDecodeError,
     ) as error:
         print(
-            f"[B MQTT] 잘못된 메시지: "
+            f"[C MQTT] 잘못된 메시지: "
             f"{error}"
         )
         return
@@ -1235,7 +1235,7 @@ def on_publish(client, userdata, mid, reason_code, properties) -> None:
     context = pending_passage_pubacks.pop(int(mid), {})
     puback_reason = getattr(reason_code, "value", reason_code)
     log_revisit_event(
-        "B_PASSAGE_PUBLISH",
+        "C_PASSAGE_PUBLISH",
         request_id=context.get("request_id"),
         journey_id=context.get("journey_id"),
         person_uid=context.get("person_uid"),
@@ -1251,7 +1251,7 @@ def on_publish(client, userdata, mid, reason_code, properties) -> None:
 def create_mqtt_client() -> mqtt.Client:
     client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,
-        client_id="camera-b",
+        client_id="camera-c",
     )
     client.on_connect = on_connect
     client.on_message = on_message
@@ -1269,10 +1269,10 @@ class StreamHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/":
             html = b"""<!doctype html><html><head><meta charset="utf-8">
-<title>Camera B</title><style>
+<title>Camera C</title><style>
 body{margin:0;background:#111;color:#fff;text-align:center;font-family:Arial}
 img{width:95%;max-width:1280px;border:2px solid #fff}</style></head>
-<body><h2>Camera B - Administrator View</h2><img src="/stream"></body></html>"""
+<body><h2>Camera C - Administrator View</h2><img src="/stream"></body></html>"""
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html)))
@@ -1310,7 +1310,7 @@ img{width:95%;max-width:1280px;border:2px solid #fff}</style></head>
 
 
 def start_web() -> None:
-    print(f"Camera B 웹 서버: http://<jetson-b-ip>:{WEB_PORT}")
+    print(f"Camera C 웹 서버: http://<jetson-c-ip>:{WEB_PORT}")
     ReusableServer(("0.0.0.0", WEB_PORT), StreamHandler).serve_forever()
 
 
@@ -1351,7 +1351,7 @@ def build_placeholder(message: str = "CAMERA DISCONNECTED") -> np.ndarray:
 
     frame = np.full((OUTPUT_HEIGHT, OUTPUT_WIDTH, 3), (18, 22, 28), np.uint8)
     cv2.putText(
-        frame, "CAMERA B", (48, 72), cv2.FONT_HERSHEY_SIMPLEX,
+        frame, "CAMERA C", (48, 72), cv2.FONT_HERSHEY_SIMPLEX,
         1.15, (255, 255, 255), 2,
     )
     text_size = cv2.getTextSize(message, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)[0]
@@ -1386,7 +1386,7 @@ def draw_stream_hud(frame: np.ndarray) -> None:
     cv2.addWeighted(overlay, 0.78, frame, 0.22, 0, frame)
     cv2.circle(frame, (33, 37), 6, (75, 75, 255), -1, cv2.LINE_AA)
     cv2.putText(
-        frame, "LIVE  |  CAM B", (48, 44), cv2.FONT_HERSHEY_SIMPLEX,
+        frame, "LIVE  |  CAM C", (48, 44), cv2.FONT_HERSHEY_SIMPLEX,
         0.55, (235, 235, 235), 1, cv2.LINE_AA,
     )
 
@@ -1439,15 +1439,15 @@ def build_output_frame(
 def main() -> None:
     global latest_jpeg
 
-    node_b_path = Path(__file__).resolve()
-    node_b_sha256 = hashlib.sha256(node_b_path.read_bytes()).hexdigest()
-    print(f"node_b.py path={node_b_path}")
-    print(f"node_b.py sha256={node_b_sha256}")
+    node_c_path = Path(__file__).resolve()
+    node_c_sha256 = hashlib.sha256(node_c_path.read_bytes()).hexdigest()
+    print(f"node_c.py path={node_c_path}")
+    print(f"node_c.py sha256={node_c_sha256}")
     print(f'decision_formula_version="{DECISION_FORMULA_VERSION}"')
-    print(f"B_PASSAGE_MIN_QUALITY={B_PASSAGE_MIN_QUALITY:.2f}")
+    print(f"C_PASSAGE_MIN_QUALITY={C_PASSAGE_MIN_QUALITY:.2f}")
 
     require_model_files(
-        "Camera B",
+        "Camera C",
         {
             "YOLO": YOLO_MODEL,
             "Re-ID TensorRT engine": REID_ENGINE,
@@ -1493,7 +1493,7 @@ def main() -> None:
     last_gallery_frame: dict[int, int] = {}
     published_local_ids: set[int] = set()
 
-    # PASSAGE 시 저장할 가장 품질 좋은 B Crop
+    # PASSAGE 시 저장할 가장 품질 좋은 C Crop
     best_capture_by_local_id: dict[int, np.ndarray] = {}
     best_capture_quality_by_local_id: dict[int, float] = {}
 
@@ -1506,11 +1506,11 @@ def main() -> None:
         threading.Thread(target=start_web, daemon=True).start()
 
         print("GPU:", torch.cuda.get_device_name(0))
-        print("Camera B Re-ID + Gallery 시작")
+        print("Camera C Re-ID + Gallery 시작")
         print(f"카메라         : /dev/video{CAMERA_DEVICE}")
         print(f"웹 포트        : {WEB_PORT}")
-        print(f"B Gallery 목표 : {B_GALLERY_TARGET}")
-        print(f"B -> Main 토픽  : {PASSAGE_TOPIC}")
+        print(f"C Gallery 목표 : {C_GALLERY_TARGET}")
+        print(f"C -> Main 토픽  : {PASSAGE_TOPIC}")
         print(f"Capture 저장    : {CAPTURE_ROOT}")
         print(
             f"밝기 보정       : "
@@ -1533,7 +1533,7 @@ def main() -> None:
 
             ok, frame = cap.read()
             if not ok:
-                print("Camera B 프레임 읽기 실패")
+                print("Camera C 프레임 읽기 실패")
                 publish_frame(build_placeholder())
                 cap.release()
                 continue
@@ -1571,7 +1571,7 @@ def main() -> None:
                     if local_id not in first_seen:
                         first_seen[local_id] = time.time()
                         log_revisit_event(
-                            "B_TRACK_DETECTED",
+                            "C_TRACK_DETECTED",
                             local_track_id=local_id,
                             first_observed_at=now_iso(),
                         )
@@ -1655,7 +1655,7 @@ def main() -> None:
                                                 )
                                                 if diagnostics is not None:
                                                     log_revisit_event(
-                                                        "B_MATCH_WINDOW",
+                                                        "C_MATCH_WINDOW",
                                                         request_id=reference.get("request_id"),
                                                         journey_id=journey_id,
                                                         person_uid=reference.get("person_uid"),
@@ -1667,7 +1667,7 @@ def main() -> None:
                                                             "consistency_count"
                                                         ],
                                                         thresholds={
-                                                            "quality": B_PASSAGE_MIN_QUALITY,
+                                                            "quality": C_PASSAGE_MIN_QUALITY,
                                                             "best": PASSAGE_MIN_BEST_SCORE,
                                                             "topk": PASSAGE_MIN_TOPK_SCORE,
                                                             "combined": PASSAGE_MIN_COMBINED_SCORE,
@@ -1685,7 +1685,7 @@ def main() -> None:
                                                     previous = last_collection_scores.get(local_id)
                                                     if previous is None or scores[2] > previous[2] + 1e-6:
                                                         print(
-                                                            f"[B COLLECTING] Journey={journey_id}, "
+                                                            f"[C COLLECTING] Journey={journey_id}, "
                                                             f"Windows={len(temporal_candidate_banks[local_id])}, "
                                                             f"Best={scores[0]:.6f}, TopK={scores[1]:.6f}, "
                                                             f"Combined={scores[2]:.6f}, Consistent={scores[3]}"
@@ -1698,7 +1698,7 @@ def main() -> None:
                                                     -1.0,
                                                 )
                                             )
-                                            if quality >= B_PASSAGE_MIN_QUALITY and quality > previous_quality:
+                                            if quality >= C_PASSAGE_MIN_QUALITY and quality > previous_quality:
                                                 best_capture_by_local_id[
                                                     local_id
                                                 ] = current_crop.copy()
@@ -1710,7 +1710,7 @@ def main() -> None:
                                             local_id not in published_local_ids
                                             and window_completed
                                             and len(galleries.get(local_id, []))
-                                            >= B_GALLERY_TARGET
+                                            >= C_GALLERY_TARGET
                                             and verify_successes.get(local_id, 0)
                                             >= PASSAGE_MIN_VERIFY_SUCCESSES
                                             and len(selected_wire_samples.get(local_id, []))
@@ -1750,7 +1750,7 @@ def main() -> None:
                                             verify_failures.get(local_id, 0) + 1
                                         )
                                         print(
-                                            f"[B 재검증 실패] Local={local_id}, "
+                                            f"[C 재검증 실패] Local={local_id}, "
                                             f"Journey={journey_id}, Score={score:.3f}, "
                                             f"Count={verify_failures[local_id]}/"
                                             f"{VERIFY_FAILURE_LIMIT}"
@@ -1815,7 +1815,7 @@ def main() -> None:
                                         box, float(confidence),
                                         frame_width, frame_height
                                     )
-                                    if quality_ok and quality >= B_PASSAGE_MIN_QUALITY:
+                                    if quality_ok and quality >= C_PASSAGE_MIN_QUALITY:
                                         tentative_observations.setdefault(local_id, []).append({
                                             "embedding": current_embedding.copy(),
                                             "quality": float(quality),
@@ -1865,7 +1865,7 @@ def main() -> None:
                                             for seed in promoted_seeds:
                                                 seed_crop = seed.get("crop")
                                                 seed_quality = float(seed.get("quality", 0.0))
-                                                if seed_crop is not None and seed_quality >= B_PASSAGE_MIN_QUALITY:
+                                                if seed_crop is not None and seed_quality >= C_PASSAGE_MIN_QUALITY:
                                                     prev_q = best_capture_quality_by_local_id.get(
                                                         local_id, -1.0
                                                     )
@@ -1891,7 +1891,7 @@ def main() -> None:
                                                 )
                                                 if diagnostics is not None:
                                                     log_revisit_event(
-                                                        "B_MATCH_WINDOW",
+                                                        "C_MATCH_WINDOW",
                                                         request_id=matched_reference.get(
                                                             "request_id"
                                                         ),
@@ -1909,7 +1909,7 @@ def main() -> None:
                                                             "consistency_count"
                                                         ],
                                                         thresholds={
-                                                            "quality": B_PASSAGE_MIN_QUALITY,
+                                                            "quality": C_PASSAGE_MIN_QUALITY,
                                                             "best": PASSAGE_MIN_BEST_SCORE,
                                                             "topk": PASSAGE_MIN_TOPK_SCORE,
                                                             "combined": (
@@ -1940,9 +1940,9 @@ def main() -> None:
                                                 if matched_reference
                                                 else "UNKNOWN"
                                             )
-                                            print("\n===== B Re-ID 매칭 성공 =====")
+                                            print("\n===== C Re-ID 매칭 성공 =====")
                                             print(f"Person UID : {matched_person_uid}")
-                                            print(f"B Local ID : {local_id}")
+                                            print(f"C Local ID : {local_id}")
                                             print(f"Journey ID : {candidate_id}")
                                             print(f"Similarity : {score:.6f}")
                                             print(f"Seeds Reused: {len(promoted_seeds)}")
@@ -1958,7 +1958,7 @@ def main() -> None:
                                     tentative_observations.pop(local_id, None)
 
                         except Exception as error:
-                            print(f"[B Re-ID 오류] Local={local_id}: {error}")
+                            print(f"[C Re-ID 오류] Local={local_id}: {error}")
 
                     journey_id = global_ids.get(local_id)
                     if journey_id is not None:
@@ -1971,11 +1971,11 @@ def main() -> None:
 
                         if local_id in published_local_ids:
                             label = f"{person_uid} | PASSED"
-                            sub = "A > [B] > D"
+                            sub = "A > [C] > D"
                             color = (255, 255, 0)
                         elif verify_failures.get(local_id, 0) > 0:
                             label = f"{person_uid} | VERIFYING"
-                            sub = "A > [B] > D"
+                            sub = "A > [C] > D"
                             color = (0, 255, 255)
                         elif temporal_candidate_banks.get(local_id):
                             label = f"{person_uid} | COLLECTING"
@@ -1986,7 +1986,7 @@ def main() -> None:
                             color = (0, 255, 0)
                         else:
                             label = f"{person_uid} | MATCHED"
-                            sub = "A > [B] > D"
+                            sub = "A > [C] > D"
                             color = (0, 255, 0)
                     else:
                         elapsed = time.time() - first_seen[local_id]
@@ -2046,7 +2046,7 @@ def main() -> None:
                         if (
                             reference is not None
                             and len(selected_wire_samples.get(local_id, []))
-                            < B_GALLERY_TARGET
+                            < C_GALLERY_TARGET
                             and local_id in temporal_windows
                         ):
                             if finalize_partial_temporal_window(
@@ -2067,7 +2067,7 @@ def main() -> None:
                         if (
                             mqtt_client is not None
                             and len(selected_wire_samples.get(local_id, []))
-                            >= B_GALLERY_TARGET
+                            >= C_GALLERY_TARGET
                             and local_id in best_capture_by_local_id
                         ):
                             final_validation_attempted = True
@@ -2090,7 +2090,7 @@ def main() -> None:
                             final_status = (
                                 "REJECTED"
                                 if len(selected_wire_samples.get(local_id, []))
-                                >= B_GALLERY_TARGET
+                                >= C_GALLERY_TARGET
                                 else "INSUFFICIENT_QUALITY"
                             )
                             if not final_validation_attempted:
@@ -2100,7 +2100,7 @@ def main() -> None:
                                     for item in selected_wire_samples.get(local_id, [])
                                 ]
                                 log_revisit_event(
-                                    "B_PASSAGE_DECISION",
+                                    "C_PASSAGE_DECISION",
                                     request_id=(reference or {}).get("request_id"),
                                     journey_id=journey_id,
                                     person_uid=(reference or {}).get("person_uid"),
@@ -2113,7 +2113,7 @@ def main() -> None:
                             mark_track_rejected(journey_id, local_id, final_status)
                 else:
                     log_revisit_event(
-                        "B_TRACK_CLEANUP",
+                        "C_TRACK_CLEANUP",
                         local_track_id=local_id,
                         reason="TRACK_LOST",
                         final_status="UNMATCHED",
@@ -2139,14 +2139,14 @@ def main() -> None:
             publish_frame(output_frame)
 
     except KeyboardInterrupt:
-        print("\nCamera B 종료")
+        print("\nCamera C 종료")
 
     finally:
         cap.release()
         if mqtt_client is not None:
             mqtt_client.loop_stop()
             mqtt_client.disconnect()
-            print("Camera B MQTT 연결 종료")
+            print("Camera C MQTT 연결 종료")
 
 
 if __name__ == "__main__":

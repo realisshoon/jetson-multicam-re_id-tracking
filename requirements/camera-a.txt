@@ -1,0 +1,11 @@
+# Camera A (Entry Node) Direct Dependencies
+# Target: Jetson Orin Nano (Python 3.10.12)
+# Node ID: A | Web Port: 8000 | Models: YOLO26n, OSNet FP16, YuNet, SFace
+
+-r jetson-common.txt
+opencv-python==4.11.0.86
+
+# Jetson Platform Dependencies (provisioned via JetPack / system wheels):
+# torch==2.8.0 (or JetPack torch 2.3.0)
+# torchvision==0.23.0 (or JetPack torchvision 0.18.0a0+6043bc2)
+# tensorrt==10.3.0

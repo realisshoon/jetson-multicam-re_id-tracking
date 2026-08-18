@@ -1,0 +1,12 @@
+# CCTV Multi-Camera Tracking System - Jetson Common Direct Dependencies
+# Target: NVIDIA Jetson Orin Nano (Ubuntu 22.04 LTS / Python 3.10.12)
+#
+# Verified common Python packages across Camera A, B, C, and D nodes.
+# Note: Platform packages (JetPack, CUDA 12.6, cuDNN 9.3, TensorRT 10.3,
+# PyTorch, torchvision, and OpenCV) are installed via JetPack / system wheels.
+
+numpy==1.26.4
+paho-mqtt==2.1.0
+PyYAML==6.0.2
+ultralytics==8.4.112
+lap==0.5.12
