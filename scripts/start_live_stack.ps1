@@ -9,7 +9,8 @@ param(
     [int]$ReadinessTimeoutSeconds = 30,
     [string]$PythonPath,
     [string]$MosquittoPath = 'C:\Program Files\mosquitto\mosquitto.exe',
-    [string]$BrokerConfigPath
+    [string]$BrokerConfigPath,
+    [double]$CPassageMinQuality = 0.70
 )
 
 $ErrorActionPreference = 'Stop'
@@ -148,6 +149,9 @@ $env:MAIN_ADMIN_CONTROL_PORT = [string]$AdminPort
 $env:MAIN_ADMIN_CONTROL_URL = "http://127.0.0.1:$AdminPort"
 $env:MAIN_ADMIN_BACKUP_ROOT = Join-Path $ProjectRoot 'data\backups\admin'
 $env:MAIN_ADMIN_CONFIRMATION_TTL_SECONDS = '300'
+$env:CCTV_C_PASSAGE_MIN_QUALITY = $CPassageMinQuality.ToString(
+    [Globalization.CultureInfo]::InvariantCulture
+)
 
 $Launchers = [Collections.Generic.List[Diagnostics.Process]]::new()
 $StartedNames = [Collections.Generic.List[string]]::new()
@@ -178,6 +182,7 @@ try {
     Write-Output ('{0,-7} {1,-6} {2} PID={3}' -f 'Main','READY',"127.0.0.1:$AdminPort",$Records.main.pid)
     Write-Output ('{0,-7} {1,-6} {2} PID={3}' -f 'API','READY',"${ApiAddress}:$ApiPort",$Records.api.pid)
     Write-Output ('{0,-7} {1,-6} {2}' -f 'DB','READY',"integrity_check=$($DbStatus.integrity_check)")
+    Write-Output ('{0,-7} {1,-6} {2}' -f 'Config','READY',"C_PASSAGE_MIN_QUALITY=$($CPassageMinQuality.ToString('0.00', [Globalization.CultureInfo]::InvariantCulture))")
 } catch {
     Write-Output "Live stack FAILED at $CurrentService`: $($_.Exception.Message)"
     foreach ($Name in @('broker','main','api')) {

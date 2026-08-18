@@ -1,7 +1,9 @@
 # Python 가상환경
 .venv/
+.venv-main/
 .venv310/
 venv/
+.codex_tmp/
 
 # pj Python virtual environment
 /bin/
@@ -19,16 +21,22 @@ __pycache__/
 *.pyd
 *.py[cod]
 *$py.class
+.pytest_cache/
 
 # 비밀번호 및 환경변수
 .env
+.env.*
+!.env.example
 *.pem
 *.key
 /configs/mqtt_config.yaml
 
-# 로컬 데이터베이스
+# 로컬 데이터베이스 및 데이터 디렉토리
 *.db
+*.db-wal
+*.db-shm
 db.sqlite3
+data/
 data/*.db
 data/*.sqlite
 data/*.sqlite3
@@ -37,12 +45,14 @@ data/*.sqlite3
 # VS Code
 .vscode/
 
-# 모델 및 TensorRT 파일
+# 모델 및 TensorRT 바이너리는 별도 관리; MANIFEST.md만 Git 추적
 *.pt
 *.pth
 *.onnx
 *.engine
 *.trt
+/models/*
+!/models/MANIFEST.md
 
 # 데이터와 실행 결과
 datasets/
@@ -51,7 +61,6 @@ runs/
 logs/
 /datasets/
 /logs/
-/models/
 /outputs/
 /runs/
 
@@ -64,7 +73,8 @@ logs/
 # Local Re-ID person capture samples
 /external/reid_jetson_package/samples/
 
-# 임시 파일
+# 임시 파일 및 압축 파일
 *.tmp
 *.log
+*.zip
 .DS_Store

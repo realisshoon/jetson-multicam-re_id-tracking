@@ -662,6 +662,116 @@ class IdentityDecisionTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=5)
 
+    def test_case_a_good_body_fail_and_face_pass_blocks_auto_returning(self) -> None:
+        # Case A (J000012 reproduction): Body fails (<0.72), Face passes (0.6282 >= 0.363)
+        self.seed_person("P000001", axis(0, 512))
+        self.seed_embedding("P000001", axis(0, 128), "FACE", 0.95)
+        face_emb = [0.0] * 128
+        face_emb[0] = 0.6282
+        face_emb[1] = (1.0 - 0.6282**2) ** 0.5
+
+        payload = self.entry("REPRO-J000012")
+        payload.update(
+            {
+                "body_count": 1,
+                "body_embedding_dim": 512,
+                "body_embeddings": [vector_with_similarity(0.6746, 1)],
+                "body_qualities": [0.90],
+                "face_available": True,
+                "face_count": 2,
+                "face_embedding_dim": 128,
+                "face_embeddings": [face_emb, face_emb],
+                "face_qualities": [0.90, 0.90],
+            }
+        )
+        main_server.handle_a_entry(self.client, payload)
+        responses = self.client.responses()
+        self.assertEqual(len(responses), 1)
+        resp = responses[0]
+        self.assertNotEqual(resp["identity_result"], "RETURNING")
+        self.assertEqual(resp["person_status"], "IDENTITY_PENDING")
+        self.assertEqual(resp["decision_reason"], "BODY_EVIDENCE_REJECTS_FACE_OVERRIDE")
+
+    def test_case_b_body_pass_and_face_pass_auto_returning(self) -> None:
+        # Case B: Good body passes (>0.75) and face passes
+        self.seed_person("P000001", axis(0, 512))
+        self.seed_embedding("P000001", axis(0, 128), "FACE", 0.95)
+        face_emb = [0.0] * 128
+        face_emb[0] = 0.65
+        face_emb[1] = (1.0 - 0.65**2) ** 0.5
+
+        payload = self.entry("BODY-PASS-FACE-PASS")
+        payload.update(
+            {
+                "body_count": 2,
+                "body_embedding_dim": 512,
+                "body_embeddings": [vector_with_similarity(0.85, 1), vector_with_similarity(0.85, 1)],
+                "body_qualities": [0.90, 0.90],
+                "face_available": True,
+                "face_count": 2,
+                "face_embedding_dim": 128,
+                "face_embeddings": [face_emb, face_emb],
+                "face_qualities": [0.90, 0.90],
+            }
+        )
+        main_server.handle_a_entry(self.client, payload)
+        responses = self.client.responses()
+        self.assertEqual(len(responses), 1)
+        resp = responses[0]
+        self.assertEqual(resp["identity_result"], "RETURNING")
+        self.assertEqual(resp["decision_reason"], "AUTO_MATCH_BODY_THRESHOLDS_MARGIN_AND_CONSISTENCY")
+
+    def test_case_c_body_strong_match_without_face_auto_returning(self) -> None:
+        # Case C / D: Body strong match, no face provided
+        self.seed_person("P000001", axis(0, 512))
+        payload = self.entry("BODY-ONLY-PASS")
+        payload.update(
+            {
+                "body_count": 2,
+                "body_embedding_dim": 512,
+                "body_embeddings": [vector_with_similarity(0.88, 1), vector_with_similarity(0.88, 1)],
+                "body_qualities": [0.90, 0.90],
+                "face_available": False,
+                "face_count": 0,
+                "face_embeddings": [],
+            }
+        )
+        main_server.handle_a_entry(self.client, payload)
+        responses = self.client.responses()
+        self.assertEqual(len(responses), 1)
+        resp = responses[0]
+        self.assertEqual(resp["identity_result"], "RETURNING")
+        self.assertEqual(resp["decision_reason"], "AUTO_MATCH_BODY_THRESHOLDS_MARGIN_AND_CONSISTENCY")
+
+    def test_case_d_face_fallback_when_body_low_quality(self) -> None:
+        # Case E: Body sample quality is below minimum threshold (<0.65) and strong face is provided
+        self.seed_person("P000001", axis(0, 512))
+        self.seed_embedding("P000001", axis(0, 128), "FACE", 0.95)
+        face_emb = [0.0] * 128
+        face_emb[0] = 0.80
+        face_emb[1] = (1.0 - 0.80**2) ** 0.5
+
+        payload = self.entry("LOW-QUALITY-BODY-FACE-FALLBACK")
+        payload.update(
+            {
+                "body_count": 1,
+                "body_embedding_dim": 512,
+                "body_embeddings": [vector_with_similarity(0.40, 1)],
+                "body_qualities": [0.30],  # below AUTO_DECISION_MIN_BODY_QUALITY (0.65)
+                "face_available": True,
+                "face_count": 2,
+                "face_embedding_dim": 128,
+                "face_embeddings": [face_emb, face_emb],
+                "face_qualities": [0.90, 0.90],
+            }
+        )
+        main_server.handle_a_entry(self.client, payload)
+        responses = self.client.responses()
+        self.assertEqual(len(responses), 1)
+        resp = responses[0]
+        self.assertEqual(resp["identity_result"], "RETURNING")
+        self.assertEqual(resp["decision_reason"], "AUTO_MATCH_FACE_THRESHOLD_MARGIN_AND_CONSISTENCY")
+
 
 if __name__ == "__main__":
     unittest.main()

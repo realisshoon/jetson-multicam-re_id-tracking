@@ -3,11 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import queue
 import re
 import sqlite3
 import threading
-import time
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +32,12 @@ from cctv_main.admin_control import (
     MainAdminControlServer,
     configured_admin_token,
 )
+from cctv_main.revisit_diagnostics import (
+    RevisitDiagnosticLogger,
+    candidate_summaries,
+    default_log_root,
+    payload_sample_diagnostics,
+)
 
 
 # ============================================================
@@ -42,6 +46,31 @@ from cctv_main.admin_control import (
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parent
+REVISIT_DIAGNOSTICS = RevisitDiagnosticLogger(
+    default_log_root(PROJECT_ROOT)
+)
+_candidate_publish_contexts: dict[int, tuple[str, dict[str, Any]]] = {}
+_candidate_publish_contexts_lock = threading.Lock()
+
+
+def revisit_log(event: str, **fields: Any) -> None:
+    """Write privacy-safe REVISIT evidence without affecting identity flow."""
+    try:
+        REVISIT_DIAGNOSTICS.write(event, **fields)
+    except (TypeError, ValueError) as error:
+        print(f"[REVISIT DIAGNOSTIC LOG REJECTED] {error}", flush=True)
+
+
+def track_candidate_puback(
+    publish_result: dict[str, Any],
+    event: str,
+    fields: dict[str, Any],
+) -> None:
+    mid = publish_result.get("mid")
+    if mid is None or publish_result.get("puback") is True:
+        return
+    with _candidate_publish_contexts_lock:
+        _candidate_publish_contexts[int(mid)] = (event, dict(fields))
 
 
 def load_runtime_settings() -> tuple[str, int, int, Path]:
@@ -92,11 +121,6 @@ DB_PATH = Path(
 MQTT_HOST, MQTT_PORT, MQTT_QOS, MQTT_CONFIG_PATH = (
     load_runtime_settings()
 )
-# Candidate delivery is rebuilt from the central active-Journey state after a
-# reconnect.  QoS 1 is deliberately not used here: Paho may retransmit an
-# already queued, now-expired candidate as DUP without re-entering application
-# validation.  QoS 0 plus recovery re-publication keeps the DB authoritative.
-MQTT_CANDIDATE_QOS = 0
 
 IDENTITY_CONFIG_PATH = Path(
     os.environ.get(
@@ -118,14 +142,6 @@ CAPTURE_CACHE_CONFIG_PATH = Path(
         PROJECT_ROOT / "configs" / "capture_cache.yaml",
     )
 ).expanduser()
-
-D_ARRIVAL_RX_LOG_DIR = Path(
-    os.environ.get(
-        "CCTV_D_ARRIVAL_RX_LOG_DIR",
-        PROJECT_ROOT / "data" / "logs",
-    )
-).expanduser()
-_d_arrival_rx_log_lock = threading.Lock()
 
 
 def load_capture_cache_settings():
@@ -189,10 +205,10 @@ def identity_setting(section: str, key: str, default: Any) -> Any:
     return values.get(key, default)
 
 
-# B 경로는 항상 유지하고, C 병렬 후보 발행/구독은 topology 설정으로
-# 활성화한다. 어느 middle node가 먼저 passage를 확정하든 D로 진행한다.
+# 운영 경로는 A -> B -> D이다. C topic/state 호환성은 유지하되 발행은
+# 설정으로만 활성화한다.
 ENABLE_CAMERA_C = bool(
-    identity_setting("topology", "camera_c_enabled", False)
+    identity_setting("topology", "camera_c_enabled", True)
 )
 
 
@@ -201,7 +217,6 @@ TOPIC_A_ENTRY = "cctv/events/a/entry"
 TOPIC_B_PASSAGE = "cctv/events/b/passage"
 TOPIC_C_PASSAGE = "cctv/events/c/passage"
 TOPIC_D_ARRIVAL = "cctv/events/d/arrival"
-TOPIC_D_DETECTION = "cctv/events/d/detection"
 TOPIC_A_TIMING = "cctv/events/a/timing"
 TOPIC_B_TIMING = "cctv/events/b/timing"
 TOPIC_C_TIMING = "cctv/events/c/timing"
@@ -279,11 +294,6 @@ MIN_CONSISTENT_FACE_FRAMES = int(
 AUTO_DECISION_MIN_BODY_QUALITY = float(
     identity_setting("matching", "auto_decision_min_body_quality", 0.80)
 )
-# Camera C PASSAGE final evidence is calibrated independently from the BODY
-# quality used by A entry, identity, gallery promotion, and D processing.
-C_PASSAGE_MIN_QUALITY = float(
-    os.environ.get("CCTV_C_PASSAGE_MIN_QUALITY", "0.74")
-)
 AUTO_DECISION_MIN_FACE_QUALITY = float(
     identity_setting("matching", "auto_decision_min_face_quality", 0.70)
 )
@@ -326,9 +336,6 @@ WAITING_D_TIMEOUT_SECONDS = float(
     D_ARRIVAL_SETTINGS.get("waiting_d_ttl_seconds", 300.0)
 )
 JOURNEY_CLEANUP_INTERVAL_SECONDS = 30.0
-MQTT_INGESTION_QUEUE_WARN_SIZE = int(
-    os.environ.get("CCTV_MQTT_INGESTION_QUEUE_WARN_SIZE", "1024")
-)
 
 D_CLOCK_TOLERANCE_SECONDS = float(
     D_ARRIVAL_SETTINGS.get("clock_tolerance_seconds", 1.0)
@@ -352,64 +359,9 @@ D_ELIGIBLE_REASONS = {
     str(value).strip().upper()
     for value in D_ARRIVAL_SETTINGS.get(
         "eligible_reasons",
-        [
-            "ELIGIBLE",
-            "ELIGIBLE_NEW_ENTRY",
-            "CONFIRMED",
-            "MULTIFRAME_CONFIRMED",
-        ],
+        ["ELIGIBLE", "CONFIRMED", "MULTIFRAME_CONFIRMED"],
     )
 }
-
-
-def structured_log(event: str, **fields: Any) -> None:
-    print(
-        "[MAIN_EVENT] "
-        + json.dumps(
-            {"event": event, "timestamp": now_iso(), **fields},
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
-        ),
-        flush=True,
-    )
-
-
-def _first_payload_value(payload: dict[str, Any], *names: str) -> Any:
-    for name in names:
-        if payload.get(name) is not None:
-            return payload[name]
-    return None
-
-
-def d_arrival_event_id(payload: dict[str, Any], raw_sha256: str) -> str:
-    supplied = _first_payload_value(
-        payload, "arrival_event_id", "event_id", "request_id"
-    )
-    if supplied is not None and str(supplied).strip():
-        return str(supplied).strip()
-    return f"DARR-{raw_sha256[:24]}"
-
-
-def append_d_arrival_rx_jsonl(record: dict[str, Any], received_at: str) -> Path:
-    """Append one exact MQTT D payload envelope outside the network callback."""
-    received = datetime.fromisoformat(received_at)
-    path = D_ARRIVAL_RX_LOG_DIR / (
-        f"d_arrival_rx_{received.strftime('%Y%m%d')}.jsonl"
-    )
-    line = json.dumps(
-        record, ensure_ascii=False, separators=(",", ":"), default=str
-    )
-    with _d_arrival_rx_log_lock:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(line + "\n")
-            stream.flush()
-    return path
-
-
-_mqtt_connection_sequence = 0
-_mqtt_connection_sequence_lock = threading.Lock()
 
 BODY_EMBEDDING_DIM = int(
     identity_setting("embedding", "body_dim", 512)
@@ -431,11 +383,7 @@ FACE_MATCH_THRESHOLD = float(
     os.environ.get("CCTV_FACE_MATCH_THRESHOLD", "0.363")
 )
 
-# Some idempotent replay paths revalidate the Journey immediately before an
-# MQTT publish while they still own the transaction serialization guard.  The
-# lock must therefore be re-entrant; SQLite write transactions are explicitly
-# committed before those replay publications below.
-db_lock = threading.RLock()
+db_lock = threading.Lock()
 INGESTION_COORDINATOR = IngestionCoordinator()
 
 
@@ -948,9 +896,6 @@ def initialize_database(*, repair_legacy_rows: bool = False) -> None:
                 node_id TEXT NOT NULL,
                 event_type TEXT NOT NULL,
                 identity_status TEXT NOT NULL,
-                local_track_id INTEGER NOT NULL,
-                journey_id TEXT,
-                person_uid TEXT,
                 canonical_person_uid TEXT,
                 payload_json TEXT NOT NULL,
                 received_at TEXT NOT NULL
@@ -2098,13 +2043,15 @@ def expire_stale_journeys(
         print(f"경과 시간   : {age_seconds:.1f} sec")
         print(f"만료 기준   : {timeout_seconds:.0f} sec")
         print("==================================")
-        if client is not None:
-            publish_journey_invalidation(
+        # D only receives a journey candidate after the B/C passage. A journey
+        # that expires while still waiting for B/C has nothing to release at D.
+        if client is not None and status == "WAITING_D":
+            publish_d_journey_release(
                 client,
                 journey_id,
                 "EXPIRED",
                 journey_status="EXPIRED",
-                reason_codes=[f"{status}_TTL_EXCEEDED"],
+                reason_codes=["WAITING_D_TTL_EXCEEDED"],
             )
 
     return expired_b_or_c, expired_d
@@ -2669,14 +2616,26 @@ def _body_promotion_allowed(match_result: dict[str, Any]) -> bool:
 
 def resolve_person_uid(
     connection: sqlite3.Connection,
-    body_embeddings: np.ndarray | list[np.ndarray],
+    body_embeddings: np.ndarray | list[np.ndarray] | None,
     timestamp: str,
     face_embeddings: list[np.ndarray] | None = None,
     *,
     body_qualities: list[float] | None = None,
     face_qualities: list[float] | None = None,
 ) -> dict[str, Any]:
-    body_result = find_existing_person(connection, body_embeddings, "BODY")
+    body_result = (
+        find_existing_person(connection, body_embeddings, "BODY")
+        if body_embeddings is not None and len(body_embeddings) > 0
+        else {
+            "ranking": [],
+            "best_candidate": None,
+            "second_combined_score": -1.0,
+            "modality": "BODY",
+            "query_gallery_count": 0,
+            "candidate_pool_size": 0,
+            "exclusion_counts": {},
+        }
+    )
     face_result = (
         find_existing_person(connection, face_embeddings, "FACE")
         if face_embeddings
@@ -2932,10 +2891,14 @@ def resolve_person_uid(
         and body_best_uid == best_uid
         and (body_multiframe_consistent or face_supports_body)
     )
+    body_evidence_present = bool(
+        qualified_body_count > 0 and body_best is not None
+    )
+    face_fallback_allowed = not body_evidence_present
     face_auto_returning = bool(
         face_consistent
         and str(strong_face["person_uid"]) == best_uid
-        and (body_best_uid is None or body_best_uid == best_uid)
+        and face_fallback_allowed
     )
 
     if (
@@ -2990,6 +2953,8 @@ def resolve_person_uid(
         if qualified_body_count == 0 and qualified_face_count == 0
         else "INSUFFICIENT_MULTIFRAME_CONSISTENCY"
         if body_returning and not body_multiframe_consistent and not face_supports_body
+        else "BODY_EVIDENCE_REJECTS_FACE_OVERRIDE"
+        if face_consistent and body_evidence_present and not body_returning
         else "FACE_EVIDENCE_REQUIRES_REVIEW"
         if face_has_identity_evidence and top1 < AUTO_NEW_THRESHOLD
         else "INSUFFICIENT_MARGIN"
@@ -3020,19 +2985,16 @@ def publish_json(
     client: mqtt.Client,
     topic: str,
     payload: dict[str, Any],
-    *,
-    qos: int | None = None,
-) -> None:
+) -> dict[str, Any]:
     serialized_payload = json.dumps(
         payload,
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    publish_qos = MQTT_QOS if qos is None else int(qos)
     result = client.publish(
         topic,
         serialized_payload,
-        qos=publish_qos,
+        qos=MQTT_QOS,
         retain=False,
     )
 
@@ -3045,26 +3007,21 @@ def publish_json(
     print(
         "[MQTT TX ACCEPTED] "
         f"topic={topic}, mid={getattr(result, 'mid', None)}, "
-        f"request_id={payload.get('request_id')}, qos={publish_qos}"
+        f"request_id={payload.get('request_id')}"
     )
     if topic == TOPIC_A_ENTRY_RESPONSE:
         print(f"[MQTT TX ENTRY_RESULT] {serialized_payload}")
-
-
-def candidate_expiry_fields(
-    reference_at: Any,
-    ttl_seconds: float,
-) -> dict[str, Any]:
-    reference_epoch = parse_iso_epoch(reference_at)
-    expires_at = None
-    if reference_epoch is not None:
-        expires_at = datetime.fromtimestamp(
-            reference_epoch + ttl_seconds,
-            tz=datetime.now().astimezone().tzinfo,
-        ).isoformat(timespec="seconds")
+    puback: bool | None = None
+    is_published = getattr(result, "is_published", None)
+    if callable(is_published):
+        try:
+            puback = bool(is_published())
+        except (RuntimeError, ValueError):
+            puback = None
     return {
-        "candidate_ttl_seconds": float(ttl_seconds),
-        "expires_at": expires_at,
+        "rc": int(result.rc),
+        "mid": getattr(result, "mid", None),
+        "puback": puback,
     }
 
 
@@ -3101,91 +3058,6 @@ def publish_journey_invalidation(
                 "timestamp": timestamp,
             },
         )
-
-
-def publish_active_journey_candidate(
-    client: mqtt.Client,
-    topic: str,
-    payload: dict[str, Any],
-    expected_status: str,
-) -> bool:
-    """Revalidate status and TTL immediately before edge candidate publish."""
-    journey_id = str(payload.get("journey_id") or "").strip()
-    if not journey_id:
-        structured_log(
-            "candidate_publish_blocked",
-            topic=topic,
-            reason="MISSING_JOURNEY_ID",
-        )
-        return False
-
-    expired = False
-    actual_status = None
-    age_seconds = None
-    ttl_seconds = (
-        WAITING_B_OR_C_TIMEOUT_SECONDS
-        if expected_status == "WAITING_B_OR_C"
-        else WAITING_D_TIMEOUT_SECONDS
-    )
-    with db_lock:
-        with connect_db() as connection:
-            row = connection.execute(
-                "SELECT status, entry_at, passage_at FROM journeys "
-                "WHERE journey_id = ?",
-                (journey_id,),
-            ).fetchone()
-            if row is not None:
-                actual_status = str(row["status"])
-                reference_at = (
-                    row["entry_at"]
-                    if expected_status == "WAITING_B_OR_C"
-                    else row["passage_at"] or row["entry_at"]
-                )
-                reference_epoch = parse_iso_epoch(reference_at)
-                if reference_epoch is not None:
-                    age_seconds = max(
-                        0.0,
-                        datetime.now().astimezone().timestamp() - reference_epoch,
-                    )
-                if (
-                    actual_status == expected_status
-                    and age_seconds is not None
-                    and age_seconds >= ttl_seconds
-                ):
-                    expire_stale_journeys(connection, client)
-                    actual_status = "EXPIRED"
-                    expired = True
-            active = row is not None and actual_status == expected_status
-
-    if not active:
-        structured_log(
-            "candidate_publish_blocked",
-            topic=topic,
-            journey_id=journey_id,
-            expected_status=expected_status,
-            actual_status=actual_status,
-            age_seconds=(round(age_seconds, 3) if age_seconds is not None else None),
-            reason="TTL_EXPIRED" if expired else "JOURNEY_NOT_ACTIVE",
-        )
-        structured_log(
-            "mqtt_queued_publish_discarded",
-            topic=topic,
-            journey_id=journey_id,
-            expected_status=expected_status,
-            actual_status=actual_status,
-            reason="TTL_EXPIRED" if expired else "JOURNEY_NOT_ACTIVE",
-        )
-        return False
-
-    structured_log(
-        "mqtt_candidate_publish",
-        topic=topic,
-        journey_id=journey_id,
-        qos=MQTT_CANDIDATE_QOS,
-        delivery_policy="QOS0_REBUILD_FROM_ACTIVE_DB_ON_RECONNECT",
-    )
-    publish_json(client, topic, payload, qos=MQTT_CANDIDATE_QOS)
-    return True
 
 
 def invalidate_active_journeys_for_reset(
@@ -3266,122 +3138,6 @@ def find_active_journey(
         """,
         (person_uid,),
     ).fetchone()
-
-
-def reuse_active_journey_for_entry(
-    connection: sqlite3.Connection,
-    active_journey: sqlite3.Row,
-    request_id: str | None,
-    entry_at: str,
-    local_track_id: Any,
-    capture_specs: list[CaptureSpec],
-    capture_parse_errors: list[dict[str, Any]],
-    payload: dict[str, Any],
-) -> None:
-    """Map a redetection to the one active Journey without starting a visit."""
-    journey_id = str(active_journey["journey_id"])
-    person_uid = str(active_journey["person_uid"])
-    record_a_entry_request(
-        connection,
-        request_id,
-        journey_id,
-        entry_at,
-        candidate_republish_allowed=True,
-    )
-    insert_capture_rows(
-        connection,
-        capture_specs,
-        journey_id,
-        active_journey["canonical_person_uid"] or person_uid,
-        now_iso(),
-    )
-    insert_failed_capture_rows(
-        connection,
-        capture_parse_errors,
-        request_id,
-        journey_id,
-        str(entry_at),
-        now_iso(),
-    )
-    save_journey_event(
-        connection,
-        journey_id,
-        "A",
-        "ENTRY_REUSED_ACTIVE_JOURNEY",
-        entry_at,
-        {
-            "event": "ENTRY_REUSED_ACTIVE_JOURNEY",
-            "request_id": request_id,
-            "journey_id": journey_id,
-            "person_uid": person_uid,
-            "local_track_id": local_track_id,
-            "active_status": str(active_journey["status"]),
-            "policy": "REUSE_LATEST_ACTIVE_JOURNEY",
-            "payload": payload,
-        },
-    )
-
-
-def reconcile_duplicate_active_journeys(
-    connection: sqlite3.Connection,
-    client: mqtt.Client | None = None,
-) -> int:
-    """Keep only the latest valid Journey for each tracking Person."""
-    rows = connection.execute(
-        """
-        SELECT journey_id, person_uid, status, entry_at
-        FROM journeys
-        WHERE status IN ('WAITING_B_OR_C', 'WAITING_D')
-        ORDER BY person_uid, entry_at DESC, journey_id DESC
-        """
-    ).fetchall()
-    latest_by_person: dict[str, str] = {}
-    rejected = 0
-    for row in rows:
-        person_uid = str(row["person_uid"])
-        journey_id = str(row["journey_id"])
-        kept_journey_id = latest_by_person.setdefault(person_uid, journey_id)
-        if kept_journey_id == journey_id:
-            continue
-        rejected_at = now_iso()
-        connection.execute(
-            "UPDATE journeys SET status='REJECTED' "
-            "WHERE journey_id=? AND status IN ('WAITING_B_OR_C','WAITING_D')",
-            (journey_id,),
-        )
-        save_journey_event(
-            connection,
-            journey_id,
-            "MAIN",
-            "REJECTED",
-            rejected_at,
-            {
-                "event": "REJECTED",
-                "journey_id": journey_id,
-                "person_uid": person_uid,
-                "reason": "SUPERSEDED_ACTIVE_JOURNEY",
-                "kept_journey_id": kept_journey_id,
-                "previous_status": str(row["status"]),
-                "policy": "LATEST_ACTIVE_JOURNEY_PER_PERSON",
-            },
-        )
-        if client is not None:
-            publish_journey_invalidation(
-                client,
-                journey_id,
-                "REJECTED",
-                journey_status="REJECTED",
-                reason_codes=["SUPERSEDED_ACTIVE_JOURNEY"],
-            )
-        structured_log(
-            "duplicate_active_journey_rejected",
-            person_uid=person_uid,
-            rejected_journey_id=journey_id,
-            kept_journey_id=kept_journey_id,
-            previous_status=str(row["status"]),
-        )
-        rejected += 1
-    return rejected
 
 
 def record_a_entry_request(
@@ -3527,6 +3283,7 @@ def begin_new_visit(
 
     result = dict(person_result)
     result["visit_count"] = visit_no
+    result["previous_visit_count"] = previous_visit_count
     result["previous_last_seen_at"] = previous_last_seen_at
     return result
 
@@ -3557,12 +3314,6 @@ def replay_existing_a_entry(
         "review_status": journey["review_status"],
         "canonical_person_uid": journey["canonical_person_uid"],
         "candidate_person_uid": journey["candidate_person_uid"],
-        "identity_candidate_key": (
-            journey["canonical_person_uid"] or journey["person_uid"]
-        ),
-        "journey_selection_key": journey["journey_id"],
-        "margin_scope": "DISTINCT_IDENTITY_CANDIDATES",
-        "active_journey_policy": "LATEST_PER_PERSON",
         "identity_confirmed": bool(
             journey["identity_result"] in {"NEW", "RETURNING"}
             and journey["review_status"] != "PENDING"
@@ -3615,23 +3366,18 @@ def replay_existing_a_entry(
             "stage": "WAITING_B_OR_C",
             "gallery_count": len(gallery),
             "gallery": gallery,
-            **candidate_expiry_fields(
-                journey["entry_at"], WAITING_B_OR_C_TIMEOUT_SECONDS
-            ),
             **common_payload,
         }
-        publish_active_journey_candidate(
+        publish_json(
             client,
             TOPIC_CANDIDATE_B,
             candidate_payload,
-            "WAITING_B_OR_C",
         )
         if ENABLE_CAMERA_C:
-            publish_active_journey_candidate(
+            publish_json(
                 client,
                 TOPIC_CANDIDATE_C,
                 candidate_payload,
-                "WAITING_B_OR_C",
             )
 
     print(
@@ -3651,12 +3397,6 @@ def handle_a_entry(
         now_iso(),
     )
 
-    parsed_samples = parse_a_entry_samples(
-        payload
-    )
-    body_samples = parsed_samples["body_samples"]
-    face_samples = parsed_samples["face_samples"]
-
     local_track_id = extract_local_track_id(
         payload
     )
@@ -3668,6 +3408,29 @@ def handle_a_entry(
     )
     if request_id == "":
         request_id = None
+
+    received_body = payload_sample_diagnostics(payload, "body")
+    received_face = payload_sample_diagnostics(payload, "face")
+
+    revisit_log(
+        "A_ENTRY_RECEIVED",
+        at=str(entry_at),
+        request_id=request_id,
+        local_track_id=local_track_id,
+        reason="A_ENTRY_RECEIVED",
+        body_sample_count=received_body["sample_count"],
+        face_sample_count=received_face["sample_count"],
+        body_qualities=received_body["qualities"],
+        face_qualities=received_face["qualities"],
+        body_embedding_summaries=received_body["summaries"],
+        face_embedding_summaries=received_face["summaries"],
+    )
+
+    parsed_samples = parse_a_entry_samples(
+        payload
+    )
+    body_samples = parsed_samples["body_samples"]
+    face_samples = parsed_samples["face_samples"]
 
     capture_specs, capture_parse_errors = parse_capture_specs(
         payload,
@@ -3686,21 +3449,12 @@ def handle_a_entry(
             # request-id mapping are one serialized transaction. This also
             # protects against a second Main/API process racing this ENTRY.
             connection.execute("BEGIN IMMEDIATE")
-            # Resolve timeout before either idempotency replay or same-person
-            # active-Journey reuse. A stale session must never absorb a new
-            # physical visit.
-            expire_stale_journeys(connection, client)
             if request_id is not None:
                 existing_journey = find_journey_by_request_id(
                     connection,
                     request_id,
                 )
                 if existing_journey is not None:
-                    # Do not keep BEGIN IMMEDIATE open while the replay path
-                    # performs the final active/TTL check through a fresh DB
-                    # connection.  This also avoids blocking an expiry update
-                    # for a stale QoS retry.
-                    connection.commit()
                     replay_existing_a_entry(
                         client,
                         connection,
@@ -3735,48 +3489,40 @@ def handle_a_entry(
                 ],
             )
 
+            revisit_log(
+                "IDENTITY_CANDIDATES_SCORED",
+                at=str(entry_at),
+                request_id=request_id,
+                candidate_person_uid=person_result.get(
+                    "candidate_person_uid"
+                ),
+                local_track_id=local_track_id,
+                reason=person_result.get("decision_reason"),
+                candidates=candidate_summaries(
+                    person_result.get("review_candidates", []),
+                    person_result.get("decision_reason"),
+                ),
+                margin=person_result.get("match_margin"),
+                thresholds={
+                    "body_best": PERSON_MATCH_THRESHOLD,
+                    "body_topk": PERSON_TOPK_THRESHOLD,
+                    "body_combined": PERSON_COMBINED_THRESHOLD,
+                    "body_review_best": PERSON_REVIEW_THRESHOLD,
+                    "body_review_combined": (
+                        PERSON_REVIEW_COMBINED_THRESHOLD
+                    ),
+                    "face": FACE_MATCH_THRESHOLD,
+                    "new": AUTO_NEW_THRESHOLD,
+                    "margin": MARGIN_THRESHOLD,
+                },
+                excluded_candidate_counts=person_result.get(
+                    "exclusion_counts", {}
+                ),
+            )
+
             person_uid = person_result[
                 "person_uid"
             ]
-
-            active_journey = find_active_journey(connection, person_uid)
-            if active_journey is not None:
-                reuse_active_journey_for_entry(
-                    connection,
-                    active_journey,
-                    request_id,
-                    str(entry_at),
-                    local_track_id,
-                    capture_specs,
-                    capture_parse_errors,
-                    payload,
-                )
-                connection.commit()
-                cache_a_entry_images(
-                    request_id,
-                    [spec.capture_key for spec in capture_specs],
-                )
-                structured_log(
-                    "active_journey_reused",
-                    policy="REUSE_LATEST_ACTIVE_JOURNEY",
-                    request_id=request_id,
-                    journey_id=str(active_journey["journey_id"]),
-                    person_uid=person_uid,
-                    journey_status=str(active_journey["status"]),
-                    identity_result=str(active_journey["identity_result"]),
-                    canonical_person_uid=active_journey[
-                        "canonical_person_uid"
-                    ],
-                )
-                replay_existing_a_entry(
-                    client,
-                    connection,
-                    active_journey,
-                    request_id,
-                    publish_candidate=True,
-                    local_track_id=local_track_id,
-                )
-                return
 
             if person_result["identity_result"] != "UNKNOWN":
                 person_result = begin_new_visit(
@@ -4064,6 +3810,60 @@ def handle_a_entry(
                 journey_id,
             )
 
+    temporary_person_uid = (
+        person_uid
+        if person_result["person_status"] in {
+            "IDENTITY_PENDING", "REVIEW_REQUIRED"
+        }
+        else None
+    )
+    revisit_common = {
+        "at": str(entry_at),
+        "request_id": request_id,
+        "journey_id": journey_id,
+        "person_uid": person_uid,
+        "temporary_person_uid": temporary_person_uid,
+        "candidate_person_uid": person_result.get("candidate_person_uid"),
+        "canonical_person_uid": person_result.get("assigned_person_uid"),
+        "local_track_id": local_track_id,
+    }
+    revisit_log(
+        "INITIAL_IDENTITY_DECISION",
+        **revisit_common,
+        reason=person_result["decision_reason"],
+        decision=person_result["person_status"],
+        selected_candidate_person_uid=person_result.get(
+            "candidate_person_uid"
+        ),
+    )
+    previous_visit_count = int(
+        person_result.get(
+            "previous_visit_count",
+            max(0, int(person_result.get("visit_count", 0)) - 1)
+            if person_result["identity_result"] != "UNKNOWN"
+            else int(person_result.get("visit_count", 0)),
+        )
+    )
+    person_event = (
+        "PERSON_CREATED"
+        if person_result["person_status"] == "NEW"
+        else "PERSON_REUSED"
+    )
+    revisit_log(
+        person_event,
+        **revisit_common,
+        reason=person_result["decision_reason"],
+        existing=person_event == "PERSON_REUSED",
+        visit_count_before=previous_visit_count,
+        visit_count_after=int(person_result.get("visit_count", 0)),
+    )
+    revisit_log(
+        "JOURNEY_CREATED",
+        **revisit_common,
+        reason="JOURNEY_INSERTED",
+        stage="WAITING_B_OR_C",
+    )
+
     cache_result = cache_a_entry_images(
         request_id,
         [spec.capture_key for spec in capture_specs],
@@ -4080,12 +3880,6 @@ def handle_a_entry(
         "identity_result": person_result["identity_result"],
         "review_status": person_result["review_status"],
         "canonical_person_uid": person_result["assigned_person_uid"],
-        "identity_candidate_key": (
-            person_result["assigned_person_uid"] or person_uid
-        ),
-        "journey_selection_key": journey_id,
-        "margin_scope": "DISTINCT_IDENTITY_CANDIDATES",
-        "active_journey_policy": "LATEST_PER_PERSON",
         "identity_confirmed": bool(
             person_result["identity_result"] in {"NEW", "RETURNING"}
             and person_result["review_status"] != "PENDING"
@@ -4224,9 +4018,6 @@ def handle_a_entry(
         "stage": "WAITING_B_OR_C",
         "gallery_count": len(gallery),
         "gallery": gallery,
-        **candidate_expiry_fields(
-            entry_at, WAITING_B_OR_C_TIMEOUT_SECONDS
-        ),
         **common_payload,
     }
 
@@ -4236,19 +4027,43 @@ def handle_a_entry(
         response_payload,
     )
 
-    publish_active_journey_candidate(
+    b_publish = publish_json(
         client,
         TOPIC_CANDIDATE_B,
         candidate_payload,
-        "WAITING_B_OR_C",
+    )
+    revisit_log(
+        "B_CANDIDATE_PUBLISHED",
+        **revisit_common,
+        reason=(
+            "PUBACK_RECEIVED"
+            if b_publish["puback"] is True
+            else "PUBLISH_ACCEPTED_AWAITING_PUBACK"
+            if b_publish["puback"] is False
+            else "PUBLISH_ACCEPTED_PUBACK_UNAVAILABLE"
+        ),
+        stage="WAITING_B_OR_C",
+        gallery_count=len(gallery),
+        mqtt_rc=b_publish["rc"],
+        mqtt_mid=b_publish["mid"],
+        mqtt_puback=b_publish["puback"],
+    )
+    track_candidate_puback(
+        b_publish,
+        "B_CANDIDATE_PUBLISHED",
+        {
+            **revisit_common,
+            "stage": "WAITING_B_OR_C",
+            "gallery_count": len(gallery),
+            "mqtt_rc": b_publish["rc"],
+        },
     )
 
     if ENABLE_CAMERA_C:
-        publish_active_journey_candidate(
+        publish_json(
             client,
             TOPIC_CANDIDATE_C,
             candidate_payload,
-            "WAITING_B_OR_C",
         )
 
     print_identity_decision(
@@ -4331,169 +4146,28 @@ def handle_a_entry(
 # B / C PASSAGE 처리
 # ============================================================
 
-def validate_c_passage_evidence(
-    connection: sqlite3.Connection,
-    journey_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Re-evaluate C's final multi-frame evidence against the A gallery."""
-    root_similarity = payload.get("combined_score", payload.get("similarity"))
-    root_quality = payload.get("quality")
-    reasons: list[str] = []
-    try:
-        final_similarity = float(root_similarity)
-    except (TypeError, ValueError):
-        final_similarity = None
-        reasons.append("C_MISSING_OR_INVALID_FINAL_SIMILARITY")
-    try:
-        final_quality = float(root_quality)
-    except (TypeError, ValueError):
-        final_quality = None
-        reasons.append("C_MISSING_OR_INVALID_FINAL_QUALITY")
-
-    a_rows = connection.execute(
-        """
-        SELECT embedding, embedding_dim
-        FROM journey_gallery
-        WHERE journey_id=? AND node_id='A' AND modality='BODY'
-        ORDER BY gallery_id
-        """,
-        (journey_id,),
-    ).fetchall()
-    a_embeddings = [
-        blob_to_embedding(row["embedding"], int(row["embedding_dim"]))
-        for row in a_rows
-    ]
-    c_samples: list[dict[str, Any]] = []
-    for item in payload.get("gallery", []):
-        if not isinstance(item, dict) or item.get("node_id") != "C":
-            continue
-        raw_embedding = item.get("embedding")
-        if not isinstance(raw_embedding, list):
-            continue
-        try:
-            embedding = normalize_embedding(raw_embedding)
-            quality = float(
-                item.get("quality", final_quality if final_quality is not None else -1)
-            )
-        except (TypeError, ValueError):
-            continue
-        if quality < C_PASSAGE_MIN_QUALITY:
-            continue
-        c_samples.append(
-            {"item": item, "embedding": embedding, "quality": quality}
-        )
-
-    best_score = topk_score = combined_score = None
-    per_frame_best: list[float] = []
-    consistent_count = 0
-    if not a_embeddings:
-        reasons.append("C_MISSING_A_GALLERY")
-    if len(c_samples) < MIN_CONSISTENT_BODY_FRAMES:
-        reasons.append("C_INSUFFICIENT_QUALITY_SAMPLES")
-    if a_embeddings and c_samples:
-        matrix = np.asarray(
-            [
-                [cosine_similarity(sample["embedding"], a) for a in a_embeddings]
-                for sample in c_samples
-            ],
-            dtype=np.float32,
-        )
-        per_frame_best = [float(value) for value in matrix.max(axis=1)]
-        flattened = np.sort(matrix.reshape(-1))[::-1]
-        best_score = float(flattened[0])
-        top_count = min(PERSON_TOPK, int(flattened.size))
-        topk_score = float(np.mean(flattened[:top_count]))
-        combined_score = (
-            PERSON_BEST_WEIGHT * best_score
-            + PERSON_TOPK_WEIGHT * topk_score
-        )
-        consistent_count = sum(
-            score >= PERSON_REVIEW_COMBINED_THRESHOLD
-            for score in per_frame_best
-        )
-        if best_score < PERSON_MATCH_THRESHOLD:
-            reasons.append("C_BEST_BELOW_THRESHOLD")
-        if topk_score < PERSON_TOPK_THRESHOLD:
-            reasons.append("C_TOPK_BELOW_THRESHOLD")
-        if combined_score < PERSON_COMBINED_THRESHOLD:
-            reasons.append("C_COMBINED_BELOW_THRESHOLD")
-        if consistent_count < MIN_CONSISTENT_BODY_FRAMES:
-            reasons.append("C_MULTIFRAME_INCONSISTENT")
-    if (
-        final_similarity is not None
-        and final_similarity < PERSON_COMBINED_THRESHOLD
-    ):
-        reasons.append("C_FINAL_SIMILARITY_BELOW_THRESHOLD")
-    if final_quality is not None and final_quality < C_PASSAGE_MIN_QUALITY:
-        reasons.append("C_FINAL_QUALITY_BELOW_THRESHOLD")
-
-    reasons = list(dict.fromkeys(reasons))
-    predicates = [
-        {
-            "name": "final_similarity",
-            "expected": f">={PERSON_COMBINED_THRESHOLD}",
-            "actual": final_similarity,
-            "pass": final_similarity is not None
-            and final_similarity >= PERSON_COMBINED_THRESHOLD,
-        },
-        {
-            "name": "final_quality",
-            "expected": f">={C_PASSAGE_MIN_QUALITY}",
-            "actual": final_quality,
-            "pass": final_quality is not None
-            and final_quality >= C_PASSAGE_MIN_QUALITY,
-        },
-        {
-            "name": "best_score",
-            "expected": f">={PERSON_MATCH_THRESHOLD}",
-            "actual": best_score,
-            "pass": best_score is not None and best_score >= PERSON_MATCH_THRESHOLD,
-        },
-        {
-            "name": "topk_score",
-            "expected": f">={PERSON_TOPK_THRESHOLD}",
-            "actual": topk_score,
-            "pass": topk_score is not None and topk_score >= PERSON_TOPK_THRESHOLD,
-        },
-        {
-            "name": "combined_score",
-            "expected": f">={PERSON_COMBINED_THRESHOLD}",
-            "actual": combined_score,
-            "pass": combined_score is not None
-            and combined_score >= PERSON_COMBINED_THRESHOLD,
-        },
-        {
-            "name": "multiframe_consistency",
-            "expected": f">={MIN_CONSISTENT_BODY_FRAMES}",
-            "actual": consistent_count,
-            "pass": consistent_count >= MIN_CONSISTENT_BODY_FRAMES,
-        },
-    ]
-    return {
-        "accepted": not reasons,
-        "reason_codes": reasons,
-        "final_similarity": final_similarity,
-        "final_quality": final_quality,
-        "best_score": best_score,
-        "topk_score": topk_score,
-        "combined_score": combined_score,
-        "consistent_count": consistent_count,
-        "per_frame_best_scores": per_frame_best,
-        "accepted_samples": c_samples,
-        "predicates": predicates,
-    }
-
 def handle_passage(
     client: mqtt.Client,
     payload: dict[str, Any],
     node_id: str,
-) -> dict[str, Any] | None:
+) -> None:
     journey_id = payload.get(
         "journey_id"
     )
 
     if not journey_id:
+        if node_id == "B":
+            revisit_log(
+                "B_PASSAGE_RECEIVED",
+                request_id=payload.get("request_id"),
+                local_track_id=extract_local_track_id(payload),
+                reason="MISSING_JOURNEY_ID",
+                approved=False,
+                score=payload.get("combined_score", payload.get("similarity")),
+                gallery_count=len(payload.get("gallery", []))
+                if isinstance(payload.get("gallery"), list)
+                else 0,
+            )
         raise ValueError(
             "PASSAGE 메시지에 journey_id가 없습니다."
         )
@@ -4520,6 +4194,20 @@ def handle_passage(
             ).fetchone()
 
             if journey is None:
+                if node_id == "B":
+                    revisit_log(
+                        "B_PASSAGE_RECEIVED",
+                        journey_id=journey_id,
+                        local_track_id=extract_local_track_id(payload),
+                        reason="JOURNEY_NOT_FOUND",
+                        approved=False,
+                        score=payload.get(
+                            "combined_score", payload.get("similarity")
+                        ),
+                        gallery_count=len(payload.get("gallery", []))
+                        if isinstance(payload.get("gallery"), list)
+                        else 0,
+                    )
                 print(
                     f"[MAIN 무시] 존재하지 않는 Journey: "
                     f"{journey_id}"
@@ -4527,63 +4215,38 @@ def handle_passage(
                 return
 
             if journey["status"] != "WAITING_B_OR_C":
+                if node_id == "B":
+                    revisit_log(
+                        "B_PASSAGE_RECEIVED",
+                        request_id=journey["request_id"],
+                        journey_id=journey_id,
+                        person_uid=journey["person_uid"],
+                        temporary_person_uid=(
+                            journey["person_uid"]
+                            if journey["review_status"] == "PENDING"
+                            else None
+                        ),
+                        candidate_person_uid=journey[
+                            "candidate_person_uid"
+                        ],
+                        canonical_person_uid=journey[
+                            "canonical_person_uid"
+                        ],
+                        local_track_id=extract_local_track_id(payload),
+                        reason=f"JOURNEY_STATUS_{journey['status']}",
+                        approved=False,
+                        score=payload.get(
+                            "combined_score", payload.get("similarity")
+                        ),
+                        gallery_count=len(payload.get("gallery", []))
+                        if isinstance(payload.get("gallery"), list)
+                        else 0,
+                    )
                 print(
                     f"[MAIN 무시] {journey_id} 현재 상태: "
                     f"{journey['status']}"
                 )
                 return
-
-            c_validation = None
-            if node_id == "C":
-                c_validation = validate_c_passage_evidence(
-                    connection,
-                    str(journey_id),
-                    payload,
-                )
-                structured_log(
-                    "c_passage_final_validation",
-                    journey_id=journey_id,
-                    person_uid=str(journey["person_uid"]),
-                    accepted=bool(c_validation["accepted"]),
-                    reason_codes=c_validation["reason_codes"],
-                    predicates=c_validation["predicates"],
-                    per_frame_best_scores=c_validation[
-                        "per_frame_best_scores"
-                    ],
-                )
-                if not c_validation["accepted"]:
-                    save_journey_event(
-                        connection,
-                        str(journey_id),
-                        "C",
-                        "PASSAGE_REJECTED",
-                        str(passage_at),
-                        {
-                            "event": "PASSAGE_REJECTED",
-                            "journey_id": journey_id,
-                            "person_uid": journey["person_uid"],
-                            "reason_codes": c_validation["reason_codes"],
-                            "predicates": c_validation["predicates"],
-                            "per_frame_best_scores": c_validation[
-                                "per_frame_best_scores"
-                            ],
-                            "payload": payload,
-                        },
-                    )
-                    save_capture_record_if_present(
-                        connection,
-                        str(journey_id),
-                        str(journey["person_uid"]),
-                        "C",
-                        str(passage_at),
-                        payload,
-                    )
-                    return {
-                        "accepted": False,
-                        "journey_status": "WAITING_B_OR_C",
-                        "reason_codes": c_validation["reason_codes"],
-                        "validation": c_validation,
-                    }
 
             gallery_items = payload.get(
                 "gallery",
@@ -4599,13 +4262,6 @@ def handle_passage(
 
                     if item.get("node_id") != node_id:
                         continue
-
-                    if node_id == "C" and c_validation is not None:
-                        if not any(
-                            sample["item"] is item
-                            for sample in c_validation["accepted_samples"]
-                        ):
-                            continue
 
                     raw_embedding = item.get(
                         "embedding"
@@ -4631,11 +4287,7 @@ def handle_passage(
                         float(
                             item.get(
                                 "quality",
-                                (
-                                    c_validation["final_quality"]
-                                    if node_id == "C" and c_validation is not None
-                                    else 1.0
-                                ),
+                                1.0,
                             )
                         ),
                     )
@@ -4694,6 +4346,33 @@ def handle_passage(
                 "entry_at"
             ]
 
+    passage_common = {
+        "request_id": journey["request_id"],
+        "journey_id": journey_id,
+        "person_uid": person_uid,
+        "temporary_person_uid": (
+            person_uid if journey["review_status"] == "PENDING" else None
+        ),
+        "candidate_person_uid": journey["candidate_person_uid"],
+        "canonical_person_uid": journey["canonical_person_uid"],
+        "local_track_id": extract_local_track_id(payload),
+    }
+    if node_id == "B":
+        revisit_log(
+            "B_PASSAGE_RECEIVED",
+            at=str(passage_at),
+            **passage_common,
+            reason="PASSAGE_ACCEPTED",
+            approved=True,
+            score=payload.get(
+                "combined_score", payload.get("similarity")
+            ),
+            gallery_count=(
+                len(gallery_items) if isinstance(gallery_items, list) else 0
+            ),
+            accepted_gallery_count=len(gallery),
+        )
+
     d_candidate_payload = {
         "event": "CANDIDATE",
         "stage": "WAITING_D",
@@ -4704,31 +4383,48 @@ def handle_passage(
         "identity_result": journey["identity_result"],
         "review_status": journey["review_status"],
         "canonical_person_uid": journey["canonical_person_uid"],
-        "tracking_person_uid": person_uid,
-        "identity_candidate_key": (
-            journey["canonical_person_uid"] or person_uid
-        ),
-        "journey_selection_key": journey_id,
-        "margin_scope": "DISTINCT_IDENTITY_CANDIDATES",
-        "active_journey_policy": "LATEST_PER_PERSON",
         "middle_node": node_id,
 
         "route": route,
         "entry_timestamp": entry_at,
         "passage_timestamp": passage_at,
-        **candidate_expiry_fields(
-            passage_at, WAITING_D_TIMEOUT_SECONDS
-        ),
 
         "gallery_count": len(gallery),
         "gallery": gallery,
     }
 
-    publish_active_journey_candidate(
+    d_publish = publish_json(
         client,
         TOPIC_CANDIDATE_D,
         d_candidate_payload,
-        "WAITING_D",
+    )
+    revisit_log(
+        "D_CANDIDATE_PUBLISHED",
+        at=str(passage_at),
+        **passage_common,
+        reason=(
+            "PUBACK_RECEIVED"
+            if d_publish["puback"] is True
+            else "PUBLISH_ACCEPTED_AWAITING_PUBACK"
+            if d_publish["puback"] is False
+            else "PUBLISH_ACCEPTED_PUBACK_UNAVAILABLE"
+        ),
+        stage="WAITING_D",
+        gallery_count=len(gallery),
+        mqtt_rc=d_publish["rc"],
+        mqtt_mid=d_publish["mid"],
+        mqtt_puback=d_publish["puback"],
+    )
+    track_candidate_puback(
+        d_publish,
+        "D_CANDIDATE_PUBLISHED",
+        {
+            "at": str(passage_at),
+            **passage_common,
+            "stage": "WAITING_D",
+            "gallery_count": len(gallery),
+            "mqtt_rc": d_publish["rc"],
+        },
     )
 
     print()
@@ -4745,11 +4441,6 @@ def handle_passage(
     print("Journey    : WAITING_D")
     print("전달 대상  : D")
     print("================================")
-    return {
-        "accepted": True,
-        "journey_status": "WAITING_D",
-        "reason_codes": [],
-    }
 
 
 # ============================================================
@@ -5973,11 +5664,7 @@ def _aware_timestamp(value: Any, field_name: str) -> datetime:
 
 
 def _arrival_event_key(payload: dict[str, Any]) -> str:
-    supplied = (
-        payload.get("arrival_event_id")
-        or payload.get("event_id")
-        or payload.get("request_id")
-    )
+    supplied = payload.get("event_id") or payload.get("request_id")
     if supplied is not None and str(supplied).strip():
         return f"D:{str(supplied).strip()}"
     identity = {
@@ -6041,12 +5728,6 @@ def validate_d_arrival(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     errors: list[str] = []
-    if payload.get("schema_version") not in (1, "1"):
-        errors.append("INVALID_SCHEMA_VERSION")
-    if str(payload.get("event") or "").upper() != "ARRIVAL":
-        errors.append("INVALID_D_EVENT")
-    if str(payload.get("node_id") or "").upper() != "D":
-        errors.append("INVALID_D_NODE")
     arrival_value = payload.get(
         "d_arrival_timestamp", payload.get("timestamp")
     )
@@ -6065,7 +5746,6 @@ def validate_d_arrival(
     route: list[str] = []
     middle_node: str | None = None
     database_passage: datetime | None = None
-    passage_event_at: str | None = None
     if journey is None:
         errors.append("JOURNEY_NOT_FOUND")
     else:
@@ -6085,7 +5765,7 @@ def validate_d_arrival(
             middle_node = route[1]
             passage_event = connection.execute(
                 """
-                SELECT event_id, event_at FROM journey_events
+                SELECT event_id FROM journey_events
                 WHERE journey_id = ? AND node_id = ? AND event_type = 'PASSAGE'
                 ORDER BY event_id DESC LIMIT 1
                 """,
@@ -6093,8 +5773,6 @@ def validate_d_arrival(
             ).fetchone()
             if passage_event is None:
                 errors.append("MISSING_CENTRAL_PASSAGE_EVENT")
-            else:
-                passage_event_at = str(passage_event["event_at"])
         if journey["passage_at"] is None:
             errors.append("MISSING_CENTRAL_PASSAGE_TIMESTAMP")
         else:
@@ -6109,7 +5787,6 @@ def validate_d_arrival(
             for value in (
                 payload.get("person_uid"),
                 payload.get("global_person_id"),
-                payload.get("tracking_person_uid"),
             )
             if value is not None and str(value).strip()
         ]
@@ -6214,7 +5891,7 @@ def validate_d_arrival(
     if not eligibility_reason:
         errors.append("MISSING_ELIGIBILITY_REASON")
     elif eligibility_reason not in D_ELIGIBLE_REASONS:
-        errors.append("ELIGIBILITY_REASON_NOT_ALLOWED")
+        errors.append("D_NOT_ELIGIBLE")
 
     track_key = _d_track_key(payload)
     if track_key is None:
@@ -6233,336 +5910,6 @@ def validate_d_arrival(
 
     # Preserve deterministic order while avoiding duplicate reason codes.
     errors = list(dict.fromkeys(errors))
-    error_set = set(errors)
-
-    def field_status(
-        field_name: str,
-        expected_type: str,
-        value: Any,
-        valid: bool,
-    ) -> dict[str, Any]:
-        return {
-            "field": field_name,
-            "present": value is not None,
-            "expected_type": expected_type,
-            "actual_type": type(value).__name__ if value is not None else None,
-            "valid_type": bool(valid),
-        }
-
-    def predicate(
-        name: str,
-        expected: Any,
-        actual: Any,
-        blocking_codes: tuple[str, ...],
-    ) -> dict[str, Any]:
-        passed = not any(code in error_set for code in blocking_codes)
-        return {
-            "name": name,
-            "predicate": name.upper(),
-            "expected": expected,
-            "actual": actual,
-            "pass": passed,
-            "passed": passed,
-            "failure_codes": [
-                code for code in blocking_codes if code in error_set
-            ],
-        }
-
-    number_fields = (
-        "passage_to_d_duration_seconds",
-        "confirmation_sample_count",
-        "confirmation_pass_count",
-        "best_journey_score",
-        "second_journey_score",
-        "journey_margin",
-    )
-    timestamp_fields = (
-        "passage_timestamp",
-        "d_track_first_seen_at",
-        "candidate_received_at",
-    )
-    payload_fields = [
-        field_status(
-            "journey_id",
-            "non-empty string",
-            payload.get("journey_id"),
-            bool(str(payload.get("journey_id") or "").strip()),
-        ),
-        field_status(
-            "person_uid",
-            "non-empty string",
-            payload.get("person_uid"),
-            bool(str(payload.get("person_uid") or "").strip()),
-        ),
-        *[
-            field_status(
-                name,
-                "timezone-aware ISO-8601 string",
-                payload.get(name),
-                name in parsed_times,
-            )
-            for name in timestamp_fields
-        ],
-        field_status(
-            "d_arrival_timestamp",
-            "timezone-aware ISO-8601 string",
-            arrival_value,
-            "d_arrival_timestamp" in parsed_times,
-        ),
-        *[
-            field_status(
-                name,
-                "number",
-                payload.get(name),
-                isinstance(payload.get(name), (int, float))
-                and not isinstance(payload.get(name), bool),
-            )
-            for name in number_fields
-        ],
-        field_status(
-            "eligibility_reason",
-            "non-empty string",
-            payload.get("eligibility_reason"),
-            bool(eligibility_reason),
-        ),
-        field_status(
-            "d_local_track_id",
-            "string or integer",
-            payload.get("d_local_track_id", payload.get("local_track_id")),
-            track_key is not None,
-        ),
-    ]
-
-    journey_status = str(journey["status"]) if journey is not None else None
-    central_person_uid = str(journey["person_uid"]) if journey is not None else None
-    canonical_person_uid = (
-        journey["canonical_person_uid"] if journey is not None else None
-    )
-    identity_result = str(journey["identity_result"]) if journey is not None else None
-    review_status = str(journey["review_status"]) if journey is not None else None
-    identity_confirmed = bool(
-        identity_result in {"NEW", "RETURNING"}
-        and review_status != "PENDING"
-        and canonical_person_uid is not None
-    )
-    person_status = str(journey["person_status"]) if journey is not None else None
-    if person_status == "NEW":
-        identity_policy = "CONFIRMED_NEW_COMPLETE_AND_PROMOTE_IF_ALLOWED"
-    elif person_status == "RETURNING":
-        identity_policy = "CONFIRMED_RETURNING_COMPLETE_AND_PROMOTE_HIGH_CONFIDENCE_ONLY"
-    else:
-        identity_policy = "PENDING_COMPLETE_ROUTE_THEN_FINAL_REVIEW_NO_AUTO_PROMOTION"
-
-    predicate_results = [
-        predicate(
-            "schema_version",
-            "1",
-            payload.get("schema_version"),
-            ("INVALID_SCHEMA_VERSION",),
-        ),
-        predicate(
-            "event_type",
-            "ARRIVAL",
-            payload.get("event"),
-            ("INVALID_D_EVENT",),
-        ),
-        predicate(
-            "node_id",
-            "D",
-            payload.get("node_id"),
-            ("INVALID_D_NODE",),
-        ),
-        predicate("journey_exists", True, journey is not None, ("JOURNEY_NOT_FOUND",)),
-        predicate(
-            "journey_status",
-            "WAITING_D",
-            journey_status,
-            ("JOURNEY_ALREADY_TERMINAL", "JOURNEY_NOT_WAITING_D"),
-        ),
-        predicate(
-            "central_route",
-            "['A','B'] or ['A','C']",
-            route,
-            ("INVALID_CENTRAL_ROUTE", "MISSING_CENTRAL_PASSAGE_EVENT"),
-        ),
-        predicate(
-            "person_binding",
-            central_person_uid,
-            {
-                "person_uid": payload.get("person_uid"),
-                "global_person_id": payload.get("global_person_id"),
-                "tracking_person_uid": payload.get("tracking_person_uid"),
-            },
-            ("ACTIVE_CANDIDATE_MISMATCH",),
-        ),
-        predicate(
-            "passage_timestamp",
-            journey["passage_at"] if journey is not None else None,
-            payload.get("passage_timestamp"),
-            (
-                "MISSING_CENTRAL_PASSAGE_TIMESTAMP",
-                "PASSAGE_TIMESTAMP_MISMATCH",
-                "CENTRAL_PASSAGE_TIMESTAMP_IN_FUTURE",
-                "MISSING_PASSAGE_TIMESTAMP",
-                "INVALID_PASSAGE_TIMESTAMP",
-                "TIMEZONE_MISSING_PASSAGE_TIMESTAMP",
-                "TIMEZONE_MISMATCH_PASSAGE_TIMESTAMP",
-            ),
-        ),
-        predicate(
-            "arrival_timestamp",
-            "timezone-aware and after passage",
-            arrival_value,
-            (
-                "MISSING_D_ARRIVAL_TIMESTAMP",
-                "INVALID_D_ARRIVAL_TIMESTAMP",
-                "TIMEZONE_MISSING_D_ARRIVAL_TIMESTAMP",
-                "TIMEZONE_MISMATCH_D_ARRIVAL_TIMESTAMP",
-            ),
-        ),
-        predicate(
-            "d_track_after_passage",
-            f">= passage-{D_CLOCK_TOLERANCE_SECONDS}s",
-            payload.get("d_track_first_seen_at"),
-            (
-                "MISSING_D_TRACK_FIRST_SEEN_AT",
-                "INVALID_D_TRACK_FIRST_SEEN_AT",
-                "TIMEZONE_MISSING_D_TRACK_FIRST_SEEN_AT",
-                "TIMEZONE_MISMATCH_D_TRACK_FIRST_SEEN_AT",
-                "D_TRACK_SEEN_BEFORE_PASSAGE",
-                "D_TRACK_FIRST_SEEN_AFTER_ARRIVAL",
-            ),
-        ),
-        predicate(
-            "candidate_received_sequence",
-            "passage <= candidate_received_at <= arrival",
-            payload.get("candidate_received_at"),
-            (
-                "MISSING_CANDIDATE_RECEIVED_AT",
-                "INVALID_CANDIDATE_RECEIVED_AT",
-                "TIMEZONE_MISSING_CANDIDATE_RECEIVED_AT",
-                "TIMEZONE_MISMATCH_CANDIDATE_RECEIVED_AT",
-                "CANDIDATE_RECEIVED_BEFORE_PASSAGE",
-                "CANDIDATE_RECEIVED_AFTER_ARRIVAL",
-            ),
-        ),
-        predicate(
-            "travel_time",
-            f"{D_MIN_TRAVEL_SECONDS}..{D_MAX_TRAVEL_SECONDS}s",
-            actual_duration,
-            (
-                "NON_POSITIVE_TRAVEL_TIME",
-                "TRAVEL_TIME_BELOW_MINIMUM",
-                "TRAVEL_TIME_ABOVE_MAXIMUM",
-                "WAITING_D_TTL_EXCEEDED",
-            ),
-        ),
-        predicate(
-            "reported_travel_time",
-            f"central elapsed ±{D_CLOCK_TOLERANCE_SECONDS}s",
-            reported_duration,
-            ("NON_POSITIVE_REPORTED_TRAVEL_TIME", "TRAVEL_DURATION_MISMATCH"),
-        ),
-        predicate(
-            "confirmation_samples",
-            f">={D_MIN_CONFIRMATION_SAMPLES}",
-            sample_count,
-            ("INSUFFICIENT_CONFIRMATION_SAMPLES",),
-        ),
-        predicate(
-            "confirmation_passes",
-            f">={D_MIN_CONFIRMATION_PASSES} and <= samples",
-            pass_count,
-            (
-                "INSUFFICIENT_CONFIRMATION_PASSES",
-                "CONFIRMATION_PASS_COUNT_EXCEEDS_SAMPLES",
-            ),
-        ),
-        predicate(
-            "journey_margin",
-            f">={D_MIN_JOURNEY_MARGIN}",
-            {
-                "best": best_score,
-                "second": second_score,
-                "reported_margin": journey_margin,
-            },
-            (
-                "INSUFFICIENT_JOURNEY_MARGIN",
-                "INSUFFICIENT_CALCULATED_JOURNEY_MARGIN",
-                "JOURNEY_MARGIN_MISMATCH",
-            ),
-        ),
-        predicate(
-            "eligibility_reason",
-            sorted(D_ELIGIBLE_REASONS),
-            eligibility_reason,
-            (
-                "MISSING_ELIGIBILITY_REASON",
-                "ELIGIBILITY_REASON_NOT_ALLOWED",
-            ),
-        ),
-        predicate(
-            "d_track_ownership",
-            "not linked to another Journey",
-            track_key,
-            ("MISSING_D_TRACK_IDENTITY", "D_TRACK_ALREADY_LINKED_TO_OTHER_JOURNEY"),
-        ),
-    ]
-    mapped_codes = {
-        code
-        for result in predicate_results
-        for code in result["failure_codes"]
-    }
-    for code in errors:
-        if code not in mapped_codes:
-            predicate_results.append(
-                {
-                    "name": f"validation_{code.lower()}",
-                    "predicate": code,
-                    "expected": "condition satisfied",
-                    "actual": code,
-                    "pass": False,
-                    "passed": False,
-                    "failure_codes": [code],
-                }
-            )
-    context = {
-        "journey_status": journey_status,
-        "route": route,
-        "db_route": route,
-        "person_uid": central_person_uid,
-        "db_person_uid": central_person_uid,
-        "tracking_person_uid": payload.get(
-            "tracking_person_uid", payload.get("person_uid")
-        ),
-        "canonical_person_uid": canonical_person_uid,
-        "db_canonical_person_uid": canonical_person_uid,
-        "candidate_person_uid": (
-            journey["candidate_person_uid"] if journey is not None else None
-        ),
-        "db_candidate_person_uid": (
-            journey["candidate_person_uid"] if journey is not None else None
-        ),
-        "person_status": person_status,
-        "identity_result": identity_result,
-        "review_status": review_status,
-        "identity_confirmed": identity_confirmed,
-        "identity_completion_policy": identity_policy,
-        "passage_timestamp": journey["passage_at"] if journey is not None else None,
-        "c_passage_stored": bool(middle_node == "C" and passage_event_at),
-        "c_passage_timestamp": passage_event_at if middle_node == "C" else None,
-        "c_passage_saved_at": passage_event_at if middle_node == "C" else None,
-        "active": journey_status in {"WAITING_B_OR_C", "WAITING_D"},
-        "expired": journey_status == "EXPIRED",
-        "arrival_timestamp": arrival_value,
-        "elapsed_seconds": actual_duration,
-        "best_journey_score": best_score,
-        "second_journey_score": second_score,
-        "combined_score": payload.get("combined_score"),
-        "top2_mean": payload.get("top2_mean"),
-        "confirmation_sample_count": sample_count,
-        "confirmation_pass_count": pass_count,
-    }
     return {
         "accepted": not errors,
         "reason_codes": errors,
@@ -6573,9 +5920,6 @@ def validate_d_arrival(
         "route": route,
         "middle_node": middle_node,
         "track_key": track_key,
-        "context": context,
-        "payload_fields": payload_fields,
-        "predicates": predicate_results,
     }
 
 
@@ -6587,40 +5931,49 @@ def publish_d_journey_release(
     journey_status: str,
     reason_codes: list[str] | None = None,
 ) -> None:
-    publish_journey_invalidation(
+    publish_json(
         client,
-        journey_id,
-        terminal_status,
-        journey_status=journey_status,
-        reason_codes=reason_codes,
-        target_nodes=("D",),
+        TOPIC_D_JOURNEY_CONTROL,
+        {
+            "schema_version": "1",
+            "event": "JOURNEY_RELEASE",
+            "action": "REMOVE",
+            "target_node": "D",
+            "journey_id": journey_id,
+            "status": terminal_status,
+            "journey_status": journey_status,
+            "release_candidate": True,
+            "reason_codes": reason_codes or [],
+            "timestamp": now_iso(),
+        },
     )
 
 def handle_d_arrival(
     client: mqtt.Client,
     payload: dict[str, Any],
-    *,
-    mqtt_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    mqtt_metadata = dict(mqtt_metadata or {})
     final_identity_result: dict[str, Any] | None = None
     journey_id = payload.get(
         "journey_id"
     )
 
     if not journey_id:
+        revisit_log(
+            "D_ARRIVAL_RECEIVED",
+            request_id=payload.get("request_id"),
+            person_uid=payload.get("person_uid"),
+            local_track_id=extract_local_track_id(payload),
+            reason="MISSING_JOURNEY_ID",
+            approved=False,
+            reason_codes=["MISSING_JOURNEY_ID"],
+            score=payload.get("combined_score", payload.get("similarity")),
+            gallery_count=payload.get("gallery_count"),
+        )
         raise ValueError(
             "ARRIVAL 메시지에 journey_id가 없습니다."
         )
 
-    received_at = str(mqtt_metadata.get("received_at") or now_iso())
-    raw_sha256 = str(mqtt_metadata.get("raw_sha256") or "")
-    arrival_event_id = str(
-        mqtt_metadata.get("arrival_event_id")
-        or d_arrival_event_id(payload, raw_sha256 or hashlib.sha256(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest())
-    )
+    received_at = now_iso()
     event_key = _arrival_event_key(payload)
     local_track_id = extract_local_track_id(payload)
     track_key = _d_track_key(payload)
@@ -6630,13 +5983,6 @@ def handle_d_arrival(
         payload.get(
             "similarity",
         ),
-    )
-
-    structured_log(
-        "d_arrival_db_transaction",
-        arrival_event_id=arrival_event_id,
-        journey_id=journey_id,
-        phase="BEGIN",
     )
 
     with db_lock:
@@ -6656,9 +6002,10 @@ def handle_d_arrival(
                 ).fetchone()
             if existing_attempt is not None:
                 duplicate_journey_status = None
+                duplicate_journey = None
                 if existing_attempt["journey_id"] is not None:
                     duplicate_journey = connection.execute(
-                        "SELECT status FROM journeys WHERE journey_id = ?",
+                        "SELECT * FROM journeys WHERE journey_id = ?",
                         (existing_attempt["journey_id"],),
                     ).fetchone()
                     if duplicate_journey is not None:
@@ -6683,17 +6030,44 @@ def handle_d_arrival(
                     f"accepted={bool(existing_attempt['accepted'])}, "
                     f"reason={existing_attempt['reason_code']}"
                 )
-                structured_log(
-                    "d_arrival_decision",
-                    arrival_event_id=arrival_event_id,
+                revisit_log(
+                    "D_ARRIVAL_RECEIVED",
+                    request_id=(
+                        duplicate_journey["request_id"]
+                        if duplicate_journey is not None
+                        else payload.get("request_id")
+                    ),
                     journey_id=journey_id,
-                    decision="DUPLICATE",
+                    person_uid=(
+                        duplicate_journey["person_uid"]
+                        if duplicate_journey is not None
+                        else payload.get("person_uid")
+                    ),
+                    temporary_person_uid=(
+                        duplicate_journey["person_uid"]
+                        if duplicate_journey is not None
+                        and duplicate_journey["review_status"] == "PENDING"
+                        else None
+                    ),
+                    candidate_person_uid=(
+                        duplicate_journey["candidate_person_uid"]
+                        if duplicate_journey is not None
+                        else None
+                    ),
+                    canonical_person_uid=(
+                        duplicate_journey["canonical_person_uid"]
+                        if duplicate_journey is not None
+                        else None
+                    ),
+                    local_track_id=local_track_id,
+                    reason=str(existing_attempt["reason_code"]),
+                    approved=bool(existing_attempt["accepted"]),
                     duplicate=True,
-                    original_accepted=bool(existing_attempt["accepted"]),
-                    final_journey_status=duplicate_journey_status,
-                    failed_reasons=safe_json_loads(
+                    reason_codes=safe_json_loads(
                         existing_attempt["reason_json"], []
                     ),
+                    score=final_score,
+                    gallery_count=payload.get("gallery_count"),
                 )
                 return {
                     "accepted": bool(existing_attempt["accepted"]),
@@ -6714,16 +6088,6 @@ def handle_d_arrival(
             ).fetchone()
 
             validation = validate_d_arrival(connection, journey, payload)
-            structured_log(
-                "d_arrival_validation",
-                arrival_event_id=arrival_event_id,
-                journey_id=journey_id,
-                decision="ACCEPTED" if validation["accepted"] else "REJECTED",
-                failed_reasons=validation["reason_codes"],
-                db_state=validation["context"],
-                payload_fields=validation["payload_fields"],
-                checks=validation["predicates"],
-            )
             arrival_at = str(validation["arrival_at"])
             reason_codes = list(validation["reason_codes"])
             stored_journey_id = str(journey_id) if journey is not None else None
@@ -6765,7 +6129,6 @@ def handle_d_arrival(
                             "event": "ARRIVAL_REJECTED",
                             "journey_id": journey_id,
                             "journey_status": str(journey["status"]),
-                            "arrival_event_id": arrival_event_id,
                             "event_key": event_key,
                             "local_track_id": local_track_id,
                             "reason_codes": reason_codes,
@@ -6785,35 +6148,11 @@ def handle_d_arrival(
                                     D_MIN_CONFIRMATION_PASSES
                                 ),
                                 "minimum_journey_margin": D_MIN_JOURNEY_MARGIN,
-                                "context": validation["context"],
-                                "payload_fields": validation["payload_fields"],
-                                "predicates": validation["predicates"],
                             },
                             "payload": payload,
                         },
                     )
                 connection.commit()
-                structured_log(
-                    "d_arrival_db_transaction",
-                    arrival_event_id=arrival_event_id,
-                    journey_id=journey_id,
-                    phase="COMMITTED_REJECTION_AUDIT",
-                    final_journey_status=(
-                        str(journey["status"]) if journey is not None else "NOT_FOUND"
-                    ),
-                )
-                structured_log(
-                    "d_arrival_decision",
-                    arrival_event_id=arrival_event_id,
-                    journey_id=journey_id,
-                    decision="REJECTED",
-                    duplicate=False,
-                    failed_reasons=reason_codes,
-                    checks=validation["predicates"],
-                    final_journey_status=(
-                        str(journey["status"]) if journey is not None else "NOT_FOUND"
-                    ),
-                )
                 journey_status = (
                     str(journey["status"])
                     if journey is not None
@@ -6835,17 +6174,50 @@ def handle_d_arrival(
                     f"journey_status={journey_status}, "
                     f"reasons={','.join(reason_codes)}"
                 )
+                revisit_log(
+                    "D_ARRIVAL_RECEIVED",
+                    at=received_at,
+                    request_id=(
+                        journey["request_id"] if journey is not None else None
+                    ),
+                    journey_id=journey_id,
+                    person_uid=(
+                        journey["person_uid"]
+                        if journey is not None
+                        else payload.get("person_uid")
+                    ),
+                    temporary_person_uid=(
+                        journey["person_uid"]
+                        if journey is not None
+                        and journey["review_status"] == "PENDING"
+                        else None
+                    ),
+                    candidate_person_uid=(
+                        journey["candidate_person_uid"]
+                        if journey is not None
+                        else None
+                    ),
+                    canonical_person_uid=(
+                        journey["canonical_person_uid"]
+                        if journey is not None
+                        else None
+                    ),
+                    local_track_id=local_track_id,
+                    reason=reason_codes[0] if reason_codes else "REJECTED",
+                    approved=False,
+                    duplicate=False,
+                    reason_codes=reason_codes,
+                    score=final_score,
+                    best_journey_score=payload.get("best_journey_score"),
+                    journey_margin=payload.get("journey_margin"),
+                    threshold=D_MIN_JOURNEY_MARGIN,
+                    gallery_count=payload.get("gallery_count"),
+                )
                 return {
                     "accepted": False,
                     "duplicate": False,
-                    "arrival_event_id": arrival_event_id,
                     "reason_codes": reason_codes,
                     "journey_status": journey_status,
-                    "validation": {
-                        "context": validation["context"],
-                        "payload_fields": validation["payload_fields"],
-                        "predicates": validation["predicates"],
-                    },
                 }
 
             assert journey is not None
@@ -7030,37 +6402,29 @@ def handle_d_arrival(
                     (arrival_at, person_uid),
                 )
 
-            completed_row = connection.execute(
-                "SELECT status, route_json, completed_at FROM journeys "
-                "WHERE journey_id = ?",
-                (journey_id,),
-            ).fetchone()
-            completed_db_state = {
-                "final_journey_status": str(completed_row["status"]),
-                "route": safe_json_loads(completed_row["route_json"], []),
-                "route_includes_d": "D" in safe_json_loads(
-                    completed_row["route_json"], []
-                ),
-                "completed_at": completed_row["completed_at"],
-                "completed_at_saved": completed_row["completed_at"] is not None,
-            }
-
-    structured_log(
-        "d_arrival_db_transaction",
-        arrival_event_id=arrival_event_id,
+    revisit_log(
+        "D_ARRIVAL_RECEIVED",
+        at=str(arrival_at),
+        request_id=journey["request_id"],
         journey_id=journey_id,
-        phase="COMMITTED",
-        **completed_db_state,
-    )
-    structured_log(
-        "d_arrival_decision",
-        arrival_event_id=arrival_event_id,
-        journey_id=journey_id,
-        decision="ACCEPTED",
+        person_uid=journey["person_uid"],
+        temporary_person_uid=(
+            journey["person_uid"]
+            if journey["review_status"] == "PENDING"
+            else None
+        ),
+        candidate_person_uid=journey["candidate_person_uid"],
+        canonical_person_uid=journey["canonical_person_uid"],
+        local_track_id=local_track_id,
+        reason="ARRIVAL_ACCEPTED",
+        approved=True,
         duplicate=False,
-        failed_reasons=[],
-        checks=validation["predicates"],
-        **completed_db_state,
+        reason_codes=[],
+        score=final_score,
+        best_journey_score=payload.get("best_journey_score"),
+        journey_margin=payload.get("journey_margin"),
+        threshold=D_MIN_JOURNEY_MARGIN,
+        gallery_count=payload.get("gallery_count"),
     )
 
     if person_status == "IDENTITY_PENDING":
@@ -7131,6 +6495,71 @@ def handle_d_arrival(
         and final_review_result != "MANUAL_REVIEW_REQUIRED"
     )
 
+    effective_final_decision = final_review_result or (
+        "REVISIT"
+        if identity_result == "RETURNING"
+        else "NEW"
+        if identity_result == "NEW"
+        else "MANUAL_REVIEW_REQUIRED"
+    )
+    final_scores = (
+        final_identity_result.get("final_scores", {})
+        if final_identity_result is not None
+        else {}
+    )
+    final_body_scores = (
+        final_scores.get("body_all", {})
+        if isinstance(final_scores, dict)
+        else {}
+    )
+    revisit_log(
+        "FINAL_REVIEW_DECISION",
+        at=str(arrival_at),
+        request_id=journey["request_id"],
+        journey_id=journey_id,
+        person_uid=person_uid,
+        temporary_person_uid=(
+            final_identity_result.get("temporary_person_uid")
+            if final_identity_result is not None
+            else None
+        ),
+        candidate_person_uid=(
+            final_identity_result.get("final_candidate_person_uid")
+            if final_identity_result is not None
+            else journey["candidate_person_uid"]
+        ),
+        canonical_person_uid=canonical_person_uid,
+        local_track_id=local_track_id,
+        reason=(
+            final_identity_result.get("resolution_outcome")
+            if final_identity_result is not None
+            else journey["decision_reason"]
+        ),
+        decision=effective_final_decision,
+        final_candidate_person_uid=(
+            final_identity_result.get("final_candidate_person_uid")
+            if final_identity_result is not None
+            else journey["candidate_person_uid"]
+        ),
+        score=final_body_scores.get(
+            "combined_score", journey["person_combined_score"]
+        ),
+        margin=final_body_scores.get(
+            "match_margin", journey["score_margin"]
+        ),
+        thresholds=(
+            final_scores.get("thresholds")
+            if isinstance(final_scores, dict) and final_scores.get("thresholds")
+            else {
+                "body_best": PERSON_MATCH_THRESHOLD,
+                "body_topk": PERSON_TOPK_THRESHOLD,
+                "body_combined": PERSON_COMBINED_THRESHOLD,
+                "margin": PERSON_MATCH_MARGIN,
+                "face": FACE_MATCH_THRESHOLD,
+            }
+        ),
+    )
+
     completed_payload = {
         "event": "JOURNEY_COMPLETED",
 
@@ -7165,11 +6594,51 @@ def handle_d_arrival(
         TOPIC_JOURNEY_COMPLETED,
         completed_payload,
     )
-    publish_journey_invalidation(
+    publish_d_journey_release(
         client,
         str(journey_id),
         "COMPLETED",
         journey_status="COMPLETED",
+    )
+
+    completed_visit_count = (
+        final_identity_result.get("target_visit_count")
+        if final_identity_result is not None
+        else None
+    )
+    if completed_visit_count is None and canonical_person_uid is not None:
+        with connect_db() as diagnostic_connection:
+            visit_row = diagnostic_connection.execute(
+                "SELECT visit_count FROM persons WHERE person_uid = ?",
+                (canonical_person_uid,),
+            ).fetchone()
+            completed_visit_count = (
+                int(visit_row["visit_count"])
+                if visit_row is not None
+                else None
+            )
+    revisit_log(
+        "JOURNEY_COMPLETED",
+        at=str(arrival_at),
+        request_id=journey["request_id"],
+        journey_id=journey_id,
+        person_uid=person_uid,
+        temporary_person_uid=(
+            final_identity_result.get("temporary_person_uid")
+            if final_identity_result is not None
+            else None
+        ),
+        candidate_person_uid=(
+            final_identity_result.get("final_candidate_person_uid")
+            if final_identity_result is not None
+            else journey["candidate_person_uid"]
+        ),
+        canonical_person_uid=canonical_person_uid,
+        local_track_id=local_track_id,
+        reason="JOURNEY_COMPLETED",
+        final_route=route,
+        visit_count=completed_visit_count,
+        final_review_result=effective_final_decision,
     )
 
     print()
@@ -7216,15 +6685,9 @@ def handle_d_arrival(
     return {
         "accepted": True,
         "duplicate": False,
-        "arrival_event_id": arrival_event_id,
         "journey_status": "COMPLETED",
         "identity_confirmed": identity_confirmed,
         "final_review_result": final_review_result,
-        "validation": {
-            "context": validation["context"],
-            "payload_fields": validation["payload_fields"],
-            "predicates": validation["predicates"],
-        },
     }
 
 
@@ -7242,10 +6705,6 @@ def recover_active_journeys(
                     connection,
                     client,
                 )
-            )
-            duplicate_active_rejected = reconcile_duplicate_active_journeys(
-                connection,
-                client,
             )
 
             rows = connection.execute(
@@ -7291,18 +6750,6 @@ def recover_active_journeys(
                     ),
                     "entry_timestamp": row["entry_at"],
                     "passage_timestamp": row["passage_at"],
-                    **candidate_expiry_fields(
-                        (
-                            row["entry_at"]
-                            if row["status"] == "WAITING_B_OR_C"
-                            else row["passage_at"] or row["entry_at"]
-                        ),
-                        (
-                            WAITING_B_OR_C_TIMEOUT_SECONDS
-                            if row["status"] == "WAITING_B_OR_C"
-                            else WAITING_D_TIMEOUT_SECONDS
-                        ),
-                    ),
                     "person_match_score": (
                         row["person_match_score"]
                     ),
@@ -7341,29 +6788,26 @@ def recover_active_journeys(
 
     for status, payload in recovery_items:
         if status == "WAITING_B_OR_C":
-            published = publish_active_journey_candidate(
+            publish_json(
                 client,
                 TOPIC_CANDIDATE_B,
                 payload,
-                "WAITING_B_OR_C",
             )
             if ENABLE_CAMERA_C:
-                publish_active_journey_candidate(
+                publish_json(
                     client,
                     TOPIC_CANDIDATE_C,
                     payload,
-                    "WAITING_B_OR_C",
                 )
-            waiting_b_or_c += int(published)
+            waiting_b_or_c += 1
 
         elif status == "WAITING_D":
-            published = publish_active_journey_candidate(
+            publish_json(
                 client,
                 TOPIC_CANDIDATE_D,
                 payload,
-                "WAITING_D",
             )
-            waiting_d += int(published)
+            waiting_d += 1
 
     print()
     print("===== MAIN: 미완료 Journey 복구 =====")
@@ -7382,10 +6826,6 @@ def recover_active_journeys(
     print(
         f"시작 시 EXPIRED(D)  : "
         f"{expired_d}"
-    )
-    print(
-        "중복 활성 REJECTED  : "
-        f"{duplicate_active_rejected}"
     )
     print("====================================")
 
@@ -7909,357 +7349,6 @@ def get_journey_timeline(
 # MQTT Callback
 # ============================================================
 
-def handle_stranger_detection(
-    payload: dict[str, Any],
-    *,
-    received_at: str | None = None,
-) -> dict[str, Any]:
-    event_id = payload.get("event_id")
-    if not isinstance(event_id, str) or not re.fullmatch(
-        r"D-[A-Za-z0-9_.:+-]+-L\d+",
-        event_id,
-    ):
-        raise ValueError("STRANGER_DETECTED event_id 형식이 올바르지 않습니다.")
-
-    event_at = payload.get("at")
-    if not isinstance(event_at, str):
-        raise ValueError("STRANGER_DETECTED at이 없습니다.")
-    try:
-        parsed_at = datetime.fromisoformat(event_at)
-    except ValueError as error:
-        raise ValueError("STRANGER_DETECTED at이 ISO-8601이 아닙니다.") from error
-    if parsed_at.tzinfo is None or parsed_at.utcoffset() is None:
-        raise ValueError("STRANGER_DETECTED at에는 timezone이 필요합니다.")
-
-    if payload.get("node") != "D":
-        raise ValueError("STRANGER_DETECTED node는 D여야 합니다.")
-    if payload.get("kind") != "STRANGER_DETECTED":
-        raise ValueError("detection kind는 STRANGER_DETECTED여야 합니다.")
-    if payload.get("identity_status") != "UNREGISTERED":
-        raise ValueError("STRANGER_DETECTED identity_status는 UNREGISTERED여야 합니다.")
-
-    local_track_id = payload.get("local_track_id")
-    if (
-        isinstance(local_track_id, bool)
-        or not isinstance(local_track_id, int)
-        or local_track_id < 0
-    ):
-        raise ValueError("STRANGER_DETECTED local_track_id가 올바르지 않습니다.")
-
-    for field_name in (
-        "journey_id",
-        "person_uid",
-        "canonical_person_uid",
-    ):
-        if payload.get(field_name) is not None:
-            raise ValueError(
-                f"STRANGER_DETECTED {field_name}는 null이어야 합니다."
-            )
-
-    normalized_received_at = received_at or now_iso()
-    normalized_payload = {
-        "event_id": event_id,
-        "at": event_at,
-        "node": "D",
-        "kind": "STRANGER_DETECTED",
-        "identity_status": "UNREGISTERED",
-        "local_track_id": local_track_id,
-        "journey_id": None,
-        "person_uid": None,
-        "canonical_person_uid": None,
-    }
-    with db_lock, connect_db() as connection:
-        cursor = connection.execute(
-            """
-            INSERT OR IGNORE INTO detection_events (
-                event_id, event_at, node_id, event_type,
-                identity_status, local_track_id, journey_id,
-                person_uid, canonical_person_uid, payload_json,
-                received_at
-            ) VALUES (?, ?, 'D', 'STRANGER_DETECTED', 'UNREGISTERED', ?,
-                      NULL, NULL, NULL, ?, ?)
-            """,
-            (
-                event_id,
-                event_at,
-                local_track_id,
-                json.dumps(
-                    normalized_payload,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-                normalized_received_at,
-            ),
-        )
-        inserted = cursor.rowcount == 1
-
-    structured_log(
-        "stranger_detection_ingested" if inserted else "stranger_detection_duplicate",
-        event_id=event_id,
-        node="D",
-        local_track_id=local_track_id,
-        event_at=event_at,
-        received_at=normalized_received_at,
-        inserted=inserted,
-    )
-    return {**normalized_payload, "inserted": inserted}
-
-def process_mqtt_message(
-    client: mqtt.Client,
-    topic: str,
-    raw_payload: bytes,
-    *,
-    retain: bool = False,
-    request_id_hint: str | None = None,
-    qos: int | None = None,
-    duplicate: bool = False,
-    received_at: str | None = None,
-) -> None:
-    received_at = received_at or now_iso()
-    raw_sha256 = hashlib.sha256(raw_payload).hexdigest()
-    raw_text = raw_payload.decode("utf-8")
-    payload = json.loads(raw_text)
-
-    d_metadata: dict[str, Any] | None = None
-    if topic == TOPIC_D_ARRIVAL:
-        arrival_event_id = d_arrival_event_id(payload, raw_sha256)
-        d_metadata = {
-            "arrival_event_id": arrival_event_id,
-            "topic": topic,
-            "qos": qos,
-            "duplicate": bool(duplicate),
-            "retain": bool(retain),
-            "payload_bytes": len(raw_payload),
-            "raw_sha256": raw_sha256,
-            "received_at": received_at,
-        }
-        rx_record = {
-            **d_metadata,
-            "person_uid": payload.get("person_uid"),
-            "tracking_person_uid": payload.get("tracking_person_uid"),
-            "canonical_person_uid": payload.get("canonical_person_uid"),
-            "journey_id": payload.get("journey_id"),
-            "local_track_id": extract_local_track_id(payload),
-            "route": payload.get("route"),
-            "stage": payload.get("stage", payload.get("status")),
-            "scores": {
-                "best_journey_score": payload.get("best_journey_score"),
-                "second_journey_score": payload.get("second_journey_score"),
-                "journey_margin": payload.get("journey_margin"),
-                "best_similarity": payload.get("best_similarity"),
-                "top2_mean": payload.get("top2_mean"),
-                "combined_score": payload.get("combined_score"),
-            },
-            "confirmation_count": {
-                "samples": payload.get("confirmation_sample_count"),
-                "passes": payload.get("confirmation_pass_count"),
-            },
-            "timestamps": {
-                "passage": payload.get("passage_timestamp"),
-                "matched": _first_payload_value(
-                    payload,
-                    "matched_at",
-                    "match_timestamp",
-                    "matched_timestamp",
-                    "match_completed_at",
-                ),
-                "published": _first_payload_value(
-                    payload,
-                    "published_at",
-                    "publish_timestamp",
-                    "published_timestamp",
-                    "event_published_at",
-                ),
-                "arrival": _first_payload_value(
-                    payload, "d_arrival_timestamp", "arrival_timestamp", "timestamp"
-                ),
-                "received": received_at,
-            },
-            # Exact decoded MQTT bytes. SHA-256 is over raw bytes, not this JSON
-            # serialization, allowing a byte-for-byte comparison with D TX.
-            "raw_payload": raw_text,
-        }
-        log_path = append_d_arrival_rx_jsonl(rx_record, received_at)
-        structured_log(
-            "d_arrival_received",
-            **{key: value for key, value in rx_record.items() if key != "raw_payload"},
-            jsonl_path=str(log_path),
-        )
-
-    if topic == TOPIC_A_ENTRY:
-        handle_a_entry(client, payload)
-    elif topic == TOPIC_B_PASSAGE:
-        handle_passage(client, payload, "B")
-    elif ENABLE_CAMERA_C and topic == TOPIC_C_PASSAGE:
-        handle_passage(client, payload, "C")
-    elif topic == TOPIC_D_ARRIVAL:
-        handle_d_arrival(client, payload, mqtt_metadata=d_metadata)
-    elif topic == TOPIC_D_DETECTION:
-        if retain:
-            raise ValueError("retained STRANGER_DETECTED 메시지는 허용하지 않습니다.")
-        handle_stranger_detection(payload, received_at=received_at)
-    elif topic in TIMING_TOPIC_NODES:
-        if retain:
-            raise ValueError("retained NODE_TIMING 메시지는 허용하지 않습니다.")
-        handle_node_timing(payload, TIMING_TOPIC_NODES[topic])
-
-
-class MqttIngestionWorker:
-    """Single ordered worker; Paho callbacks only copy and enqueue messages."""
-
-    def __init__(
-        self,
-        client: mqtt.Client,
-        *,
-        maxsize: int = MQTT_INGESTION_QUEUE_WARN_SIZE,
-    ) -> None:
-        self.client = client
-        # Never block or drop inside Paho's callback. ``maxsize`` remains the
-        # backwards-compatible warning threshold; the FIFO itself is
-        # intentionally unbounded and reports sustained backlog.
-        self.queue_warn_size = max(1, maxsize)
-        self.queue: queue.Queue[dict[str, Any] | None] = queue.Queue()
-        self.thread = threading.Thread(
-            target=self._run,
-            daemon=True,
-            name="mqtt-ingestion-worker",
-        )
-        self._started = False
-
-    def start(self) -> None:
-        if not self._started:
-            self._started = True
-            self.thread.start()
-
-    def enqueue_message(
-        self,
-        topic: str,
-        raw_payload: bytes,
-        *,
-        retain: bool,
-        request_id_hint: str | None,
-        qos: int | None = None,
-        duplicate: bool = False,
-        received_at: str | None = None,
-    ) -> bool:
-        item = {
-            "kind": "message",
-            "topic": topic,
-            "raw_payload": bytes(raw_payload),
-            "retain": retain,
-            "request_id": request_id_hint,
-            "qos": qos,
-            "duplicate": bool(duplicate),
-            "received_at": received_at or now_iso(),
-            "enqueued_monotonic": time.monotonic(),
-        }
-        self.queue.put_nowait(item)
-        if self.queue.qsize() >= self.queue_warn_size:
-            structured_log(
-                "mqtt_ingestion_backlog_high",
-                topic=topic,
-                request_id=request_id_hint,
-                queue_size=self.queue.qsize(),
-                warning_size=self.queue_warn_size,
-            )
-        return True
-
-    def enqueue_recovery(self) -> None:
-        self.queue.put_nowait(
-            {
-                "kind": "recovery",
-                "enqueued_monotonic": time.monotonic(),
-            }
-        )
-        if self.queue.qsize() >= self.queue_warn_size:
-            structured_log(
-                "mqtt_ingestion_backlog_high",
-                topic="__recovery__",
-                queue_size=self.queue.qsize(),
-                warning_size=self.queue_warn_size,
-            )
-
-    def _run(self) -> None:
-        structured_log("mqtt_ingestion_worker_started")
-        while True:
-            item = self.queue.get()
-            try:
-                if item is None:
-                    return
-                started = time.monotonic()
-                queue_wait_ms = round(
-                    (started - float(item["enqueued_monotonic"])) * 1000.0,
-                    3,
-                )
-                kind = str(item["kind"])
-                topic = str(item.get("topic") or "__recovery__")
-                request_id_hint = item.get("request_id")
-                structured_log(
-                    "mqtt_handler_started",
-                    kind=kind,
-                    topic=topic,
-                    request_id=request_id_hint,
-                    queue_wait_ms=queue_wait_ms,
-                    queue_size=self.queue.qsize(),
-                )
-                outcome = "success"
-                error_type = None
-                try:
-                    with INGESTION_COORDINATOR.work():
-                        if kind == "recovery":
-                            recover_active_journeys(self.client)
-                        else:
-                            process_mqtt_message(
-                                self.client,
-                                topic,
-                                bytes(item["raw_payload"]),
-                                retain=bool(item.get("retain", False)),
-                                request_id_hint=(
-                                    str(request_id_hint)
-                                    if request_id_hint is not None
-                                    else None
-                                ),
-                                qos=item.get("qos"),
-                                duplicate=bool(item.get("duplicate", False)),
-                                received_at=str(item.get("received_at") or now_iso()),
-                            )
-                except Exception as error:
-                    outcome = "failed"
-                    error_type = type(error).__name__
-                    print()
-                    print("===== MAIN 처리 오류 =====")
-                    print(f"Topic : {topic}")
-                    print(f"Request ID : {request_id_hint}")
-                    print(f"Error : {error}")
-                    print("Traceback:")
-                    traceback.print_exc()
-                    print("==========================")
-                finally:
-                    structured_log(
-                        "mqtt_handler_finished",
-                        kind=kind,
-                        topic=topic,
-                        request_id=request_id_hint,
-                        outcome=outcome,
-                        error_type=error_type,
-                        duration_ms=round(
-                            (time.monotonic() - started) * 1000.0, 3
-                        ),
-                    )
-            finally:
-                self.queue.task_done()
-
-    def stop(self, timeout: float = 30.0) -> None:
-        if not self._started:
-            return
-        self.queue.put(None)
-        self.thread.join(timeout=timeout)
-        structured_log(
-            "mqtt_ingestion_worker_stopped",
-            alive=self.thread.is_alive(),
-            pending=self.queue.qsize(),
-        )
-
 def on_connect(
     client: mqtt.Client,
     userdata,
@@ -8267,26 +7356,13 @@ def on_connect(
     reason_code,
     properties,
 ) -> None:
-    global _mqtt_connection_sequence
     if reason_code != 0:
-        structured_log(
-            "mqtt_connect_failed",
-            broker=f"{MQTT_HOST}:{MQTT_PORT}",
-            reason_code=str(reason_code),
+        print(
+            f"Main MQTT 연결 실패: "
+            f"{reason_code}"
         )
         return
 
-    with _mqtt_connection_sequence_lock:
-        _mqtt_connection_sequence += 1
-        connection_sequence = _mqtt_connection_sequence
-    structured_log(
-        "mqtt_connected",
-        broker=f"{MQTT_HOST}:{MQTT_PORT}",
-        reason_code=str(reason_code),
-        flags=str(flags),
-        connection_sequence=connection_sequence,
-        reconnect=connection_sequence > 1,
-    )
     print(
         f"Main MQTT 연결 완료: "
         f"{MQTT_HOST}:{MQTT_PORT}"
@@ -8296,7 +7372,6 @@ def on_connect(
         TOPIC_A_ENTRY,
         TOPIC_B_PASSAGE,
         TOPIC_D_ARRIVAL,
-        TOPIC_D_DETECTION,
         TOPIC_A_TIMING,
         TOPIC_B_TIMING,
         TOPIC_C_TIMING,
@@ -8323,29 +7398,8 @@ def on_connect(
             f"rc={subscribe_result}, mid={message_id}"
         )
 
-    if isinstance(userdata, MqttIngestionWorker):
-        userdata.enqueue_recovery()
-    else:
-        # Unit-test and embedded callers without runtime userdata remain
-        # deterministic; production always supplies MqttIngestionWorker.
-        recover_active_journeys(client)
-
-
-def on_disconnect(
-    client: mqtt.Client,
-    userdata,
-    disconnect_flags,
-    reason_code,
-    properties,
-) -> None:
-    del client, userdata
-    structured_log(
-        "mqtt_disconnected",
-        broker=f"{MQTT_HOST}:{MQTT_PORT}",
-        reason_code=str(reason_code),
-        disconnect_flags=str(disconnect_flags),
-        properties=str(properties),
-        unexpected=(str(reason_code) not in {"0", "Success", "Normal disconnection"}),
+    recover_active_journeys(
+        client
     )
 
 
@@ -8364,13 +7418,36 @@ def on_subscribe(
     )
 
 
+def on_publish(
+    client: mqtt.Client,
+    userdata,
+    message_id: int,
+    reason_code,
+    properties,
+) -> None:
+    del client, userdata, properties
+    with _candidate_publish_contexts_lock:
+        pending = _candidate_publish_contexts.pop(message_id, None)
+    print(f"[MQTT PUBACK] mid={message_id}, reason={reason_code}")
+    if pending is None:
+        return
+    event, fields = pending
+    revisit_log(
+        event,
+        **fields,
+        reason="PUBACK_RECEIVED",
+        mqtt_mid=message_id,
+        mqtt_puback=True,
+        mqtt_puback_reason=str(reason_code),
+    )
+
+
 def on_message(
     client: mqtt.Client,
     userdata,
     message: mqtt.MQTTMessage,
 ) -> None:
     raw_payload = bytes(message.payload)
-    received_at = now_iso()
     request_match = re.search(
         rb'"request_id"\s*:\s*"([^"\\]*)"',
         raw_payload,
@@ -8383,45 +7460,63 @@ def on_message(
     print(
         "[MQTT RX] "
         f"topic={message.topic}, payload_bytes={len(raw_payload)}, "
-        f"request_id={request_id_hint}, qos={getattr(message, 'qos', None)}, "
-        f"duplicate={bool(getattr(message, 'dup', False))}"
+        f"request_id={request_id_hint}"
     )
-    if isinstance(userdata, MqttIngestionWorker):
-        userdata.enqueue_message(
-            str(message.topic),
-            raw_payload,
-            retain=bool(getattr(message, "retain", False)),
-            request_id_hint=request_id_hint,
-            qos=getattr(message, "qos", None),
-            duplicate=bool(getattr(message, "dup", False)),
-            received_at=received_at,
-        )
-        return
-
-    # Compatibility path for direct unit tests; the live Main always passes a
-    # worker through Paho userdata, so its network loop never executes handlers.
-    try:
-        with INGESTION_COORDINATOR.work():
-            process_mqtt_message(
-                client,
-                str(message.topic),
-                raw_payload,
-                retain=bool(getattr(message, "retain", False)),
-                request_id_hint=request_id_hint,
-                qos=getattr(message, "qos", None),
-                duplicate=bool(getattr(message, "dup", False)),
-                received_at=received_at,
+    with INGESTION_COORDINATOR.work():
+        try:
+            payload = json.loads(
+                raw_payload.decode("utf-8")
             )
-    except Exception as error:
-        print()
-        print("===== MAIN 처리 오류 =====")
-        print(f"Topic : {message.topic}")
-        print(f"Payload Bytes : {len(raw_payload)}")
-        print(f"Request ID : {request_id_hint}")
-        print(f"Error : {error}")
-        print("Traceback:")
-        traceback.print_exc()
-        print("==========================")
+
+            if message.topic == TOPIC_A_ENTRY:
+                handle_a_entry(
+                    client,
+                    payload,
+                )
+
+            elif message.topic == TOPIC_B_PASSAGE:
+                handle_passage(
+                    client,
+                    payload,
+                    "B",
+                )
+
+            elif (
+                ENABLE_CAMERA_C
+                and message.topic == TOPIC_C_PASSAGE
+            ):
+                handle_passage(
+                    client,
+                    payload,
+                    "C",
+                )
+
+            elif message.topic == TOPIC_D_ARRIVAL:
+                handle_d_arrival(
+                    client,
+                    payload,
+                )
+
+            elif message.topic in TIMING_TOPIC_NODES:
+                if bool(getattr(message, "retain", False)):
+                    raise ValueError(
+                        "retained NODE_TIMING 메시지는 허용하지 않습니다."
+                    )
+                handle_node_timing(
+                    payload,
+                    TIMING_TOPIC_NODES[message.topic],
+                )
+
+        except Exception as error:
+            print()
+            print("===== MAIN 처리 오류 =====")
+            print(f"Topic : {message.topic}")
+            print(f"Payload Bytes : {len(raw_payload)}")
+            print(f"Request ID : {request_id_hint}")
+            print(f"Error : {error}")
+            print("Traceback:")
+            traceback.print_exc()
+            print("==========================")
 
 
 # ============================================================
@@ -8487,14 +7582,11 @@ def main() -> None:
         client_id="cctv_main_server_pc",
     )
     mqtt_client_holder["client"] = client
-    ingestion_worker = MqttIngestionWorker(client)
-    client.user_data_set(ingestion_worker)
 
     client.on_connect = on_connect
-    client.on_disconnect = on_disconnect
     client.on_subscribe = on_subscribe
+    client.on_publish = on_publish
     client.on_message = on_message
-    ingestion_worker.start()
 
     print("CCTV Main Server 시작")
     print(f"DB     : {DB_PATH}")
@@ -8502,7 +7594,6 @@ def main() -> None:
         f"Broker : "
         f"{MQTT_HOST}:{MQTT_PORT}"
     )
-    print(f"C_PASSAGE_MIN_QUALITY={C_PASSAGE_MIN_QUALITY:.2f}")
     print(
         f"A 응답 : "
         f"{TOPIC_A_ENTRY_RESPONSE}"
@@ -8539,7 +7630,6 @@ def main() -> None:
 
     finally:
         cleanup_stop_event.set()
-        ingestion_worker.stop()
         client.disconnect()
         if admin_server is not None:
             admin_server.shutdown()

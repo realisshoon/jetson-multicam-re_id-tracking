@@ -476,6 +476,60 @@ class DatabaseAdminControllerTest(unittest.TestCase):
             control.server_close()
             control_thread.join(5)
 
+    def test_before_reset_callback_is_called_and_handles_int_return(self) -> None:
+        called = []
+
+        def callback_returning_int() -> int:
+            called.append("hook_called")
+            return 42
+
+        controller = DatabaseAdminController(
+            self.db_path,
+            self.capture_root,
+            self.backup_root,
+            main_server.initialize_database,
+            self.ingestion,
+            before_reset=callback_returning_int,
+        )
+        self.assertTrue(callable(controller.before_reset))
+        preview = controller.preview_reset()
+        accepted = controller.execute_reset(self.reset_request(preview["confirmation_id"]))
+        job = self.wait_for_job(controller, accepted["job_id"])
+        self.assertEqual(job["status"], "COMPLETED")
+        self.assertEqual(called, ["hook_called"])
+        history_statuses = [item["status"] for item in job["history"]]
+        self.assertIn("PAUSING_INGESTION", history_statuses)
+        self.assertIn("BACKING_UP", history_statuses)
+        self.assertIn("RESETTING", history_statuses)
+
+    def test_reset_succeeds_while_read_connection_is_open(self) -> None:
+        self.seed_person_and_journey()
+        (self.capture_root / "old.jpg").write_bytes(b"jpeg")
+
+        # Keep a separate read-only connection open to simulate concurrent API reader
+        reader = sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True)
+        try:
+            reader.execute("SELECT COUNT(*) FROM persons").fetchone()
+            confirmation = self.controller.preview_reset()["confirmation_id"]
+            accepted = self.controller.execute_reset(self.reset_request(confirmation))
+            job = self.wait_for_job(self.controller, accepted["job_id"])
+            self.assertEqual(job["status"], "COMPLETED")
+            self.assertEqual(job["integrity_check"], "ok")
+        finally:
+            reader.close()
+
+        with closing(self.connect()) as connection:
+            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM persons").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM journeys").fetchone()[0], 0)
+
+    def test_main_server_default_before_reset_is_callable(self) -> None:
+        client_holder: dict[str, Any] = {"client": None}
+        hook = lambda: main_server.invalidate_active_journeys_for_reset(client_holder.get("client"))
+        self.assertTrue(callable(hook))
+        self.assertEqual(hook(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

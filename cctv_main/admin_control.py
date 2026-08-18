@@ -494,7 +494,8 @@ class DatabaseAdminController:
             self._checkpoint_wal()
             backup_dir, _ = self._create_verified_snapshot(job_id)
             self._set_job(job_id, "RESETTING", backup_id=backup_dir.name)
-            self._archive_live_files(backup_dir, capture_policy)
+            self._archive_live_captures(backup_dir, capture_policy)
+            self._reset_database_in_place()
             self._set_job(job_id, "REOPENING")
             self.initialize_database()
             self.clear_runtime_state()
@@ -507,15 +508,10 @@ class DatabaseAdminController:
             )
         except Exception as error:
             restore_error = None
-            retired = backup_dir / "retired_live" if backup_dir is not None else None
-            archived_live_files = bool(
-                retired is not None
-                and retired.exists()
-                and any(retired.iterdir())
-            )
-            if archived_live_files and backup_dir is not None:
+            if backup_dir is not None:
                 try:
-                    self._restore_live_files(backup_dir)
+                    self._restore_from_snapshot(backup_dir)
+                    self._restore_live_captures(backup_dir)
                 except Exception as nested:
                     restore_error = _safe_error_message(nested)
             error_message = _safe_error_message(error)
@@ -526,37 +522,59 @@ class DatabaseAdminController:
         finally:
             self.ingestion.resume()
 
-    def _archive_live_files(self, backup_dir: Path, capture_policy: str) -> None:
+    def _archive_live_captures(self, backup_dir: Path, capture_policy: str) -> None:
         if capture_policy != "ARCHIVE":
             raise ValueError("unsupported capture policy")
         retired = backup_dir / "retired_live"
-        retired.mkdir(parents=True, exist_ok=False)
-        for path in self._database_files():
-            if path.exists():
-                path.replace(retired / path.name)
+        retired.mkdir(parents=True, exist_ok=True)
         if self.capture_root.exists():
-            self.capture_root.replace(retired / "captures")
+            target = retired / "captures"
+            if target.exists():
+                shutil.rmtree(target)
+            self.capture_root.replace(target)
         self.capture_root.mkdir(parents=True, exist_ok=True)
 
-    def _restore_live_files(self, backup_dir: Path) -> None:
+    _archive_live_files = _archive_live_captures
+
+    def _restore_live_captures(self, backup_dir: Path) -> None:
         retired = backup_dir / "retired_live"
-        failed = backup_dir / "failed_new"
-        failed.mkdir(parents=True, exist_ok=True)
-        for path in self._database_files():
-            if path.exists():
-                path.replace(failed / path.name)
-        if self.capture_root.exists():
-            unique = failed / "captures"
-            if unique.exists():
-                unique = failed / f"captures-{secrets.token_hex(2)}"
-            self.capture_root.replace(unique)
-        for archived in retired.glob(f"{self.db_path.name}*"):
-            archived.replace(self.db_path.parent / archived.name)
         archived_capture = retired / "captures"
         if archived_capture.exists():
+            if self.capture_root.exists():
+                shutil.rmtree(self.capture_root)
             archived_capture.replace(self.capture_root)
         else:
             self.capture_root.mkdir(parents=True, exist_ok=True)
+
+    _restore_live_files = _restore_live_captures
+
+    def _reset_database_in_place(self) -> None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute("PRAGMA foreign_keys = OFF")
+                for table in BUSINESS_TABLES:
+                    if self._table_exists(connection, table):
+                        connection.execute(f'DELETE FROM "{table}"')
+                if self._table_exists(connection, "sqlite_sequence"):
+                    connection.execute("DELETE FROM sqlite_sequence")
+                connection.execute("PRAGMA foreign_keys = ON")
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def _restore_from_snapshot(self, backup_dir: Path) -> None:
+        snapshot = backup_dir / "database.snapshot.db"
+        if snapshot.exists() and self.db_path.exists():
+            source = sqlite3.connect(f"file:{snapshot.as_posix()}?mode=ro", uri=True)
+            destination = sqlite3.connect(self.db_path, timeout=30)
+            try:
+                source.backup(destination)
+            finally:
+                destination.close()
+                source.close()
 
     def _database_files(self) -> tuple[Path, Path, Path]:
         return (

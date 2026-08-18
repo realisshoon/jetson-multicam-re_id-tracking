@@ -1,4 +1,14 @@
+# CCTV Multi-Camera Tracking System - Main Server Direct Dependencies
+# Target: Windows 11 / Linux (Python 3.10.x)
+#
+# Runtime Direct Dependencies:
 numpy==1.26.4
 paho-mqtt==2.1.0
 PyYAML==6.0.2
 Pillow==12.0.0
+
+# Note:
+# - Standard libraries (sqlite3, http.server, threading, queue, json, pathlib) are built into Python stdlib.
+# - System services (Mosquitto MQTT Broker, SQLite) are managed at the system level.
+# - Test tooling (pytest) is separated from runtime dependencies.
+# - Exact environment freeze is recorded at snapshots/main-server.freeze.txt.
