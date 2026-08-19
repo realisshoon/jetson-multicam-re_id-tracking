@@ -276,6 +276,15 @@ def ingest_journey(data: dict[str, Any]) -> Journey | None:
 
     canonical_uid = data.get("canonical_person_uid") or identity.get("canonical_person_uid") or ""
     review_result = data.get("identity_result") or identity.get("final_result") or ""
+    # 2026-08-15 실측: Main 이 재방문 판정값을 "REVISIT"에서 "RETURNING"으로
+    # 조용히 바꿨다(person_status 필드가 원래 쓰던 이름과 맞춘 듯) — 우리
+    # Journey.REVISIT 상수는 여전히 "REVISIT"라, 이 값을 그대로 저장하면
+    # views.py 의 여러 곳(감지 리스트 필터, main_resolved 판정, 재방문
+    # 통계)이 전부 "이 사람 신원 미확정"으로 잘못 읽는다 — 등록완료 차임이
+    # 재방문자한테만 안 울리는 형태로 나타났다. 여기서 한 번만 정규화해서
+    # 저장하면 아래 로직들은 손 안 대도 된다.
+    if review_result == "RETURNING":
+        review_result = Journey.REVISIT
     entry_at = _parse_at(data.get("entry_at"))
     d_exit_at = _parse_at(timing.get("d_exit"))
     elapsed = timing.get("elapsed_seconds")
