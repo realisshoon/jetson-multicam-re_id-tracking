@@ -74,7 +74,7 @@ flowchart TD
 - **Person / Journey 분리 관리**: 영구 인물 식별자(Person UID)와 방문 세션 식별자(Journey ID) 독립 관리
 - **신규 방문 및 재방문 판정**: 과거 등록 갤러리 비교를 통한 방문 횟수(Visit Count) 및 재방문자 자동 분류
 - **이동 경로 검증(Route Validation)**: `A → B → D` 및 `A → C → D` 정상 경로 이탈 및 역주행 방지
-- **이동 시간 검증(Temporal Guardrails)**: 노드 간 최소/최대 이동 소요 시간 및 타임스탬프 유효성 검사
+- **이동 시간 검증(Temporal Guardrails)**: B/C 통과 후 D 도착까지의 실측 시간이 1~300초 범위인지 확인하고 타임스탬프 유효성 검사
 - **미등록자 감지(Stranger Detection)**: 후보자에 등록되지 않은 인물의 체류 감지 및 경보 발행
 - **비동기 메시징**: MQTT QoS 1 기반 메시지 무손실 전달 및 실시간 이벤트 동기화
 - **고신뢰성 데이터 저장**: SQLite WAL(Write-Ahead Logging) 모드 기반 동시성 트랜잭션 처리
