@@ -28,6 +28,20 @@
 >
 > **참고**: Eclipse Mosquitto MQTT Broker는 메인 서버와 분리된 독립 네트워크 메시지 중계 서비스로 동작합니다.
 
+### 실제 시연 화면
+
+**4대 Jetson 카메라 스트림과 Journey 상태를 통합한 관리자 대시보드**
+
+<p align="center">
+  <img src="docs/images/demo-dashboard.jpg" alt="4대 Jetson 통합 대시보드" width="100%">
+</p>
+
+**재방문 식별과 정상 경로 완료 상태를 표시한 실제 실행 결과**
+
+<p align="center">
+  <img src="docs/images/demo-revisit-route.jpg" alt="재방문 식별 및 정상 경로 완료 결과" width="55%">
+</p>
+
 ---
 
 ## 3. 주요 기능
