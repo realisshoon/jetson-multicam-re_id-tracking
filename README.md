@@ -18,48 +18,14 @@
 
 ## 2. 시스템 구성
 
-```mermaid
-flowchart TD
-    subgraph Edge_Nodes [Jetson AI 엣지 노드]
-        CamA["Camera A (진입, Port 8000)<br>YOLO + ByteTrack + OSNet + YuNet/SFace"]
-        CamB["Camera B (경유, Port 8001)<br>YOLO + ByteTrack + OSNet Re-ID"]
-        CamC["Camera C (경유, Port 8002)<br>YOLO + ByteTrack + OSNet Re-ID"]
-        CamD["Camera D (도착, Port 8003)<br>YOLO + ByteTrack + OSNet + 미등록 감지"]
-    end
+<p align="center">
+  <img src="docs/images/system-architecture.svg" alt="Jetson Multi-Camera Re-ID 시스템 구조" width="100%">
+</p>
 
-    subgraph Messaging [메시지 브로커]
-        MQTT["Eclipse Mosquitto MQTT Broker<br>(TCP Port 1883)"]
-    end
-
-    subgraph Central_Core [중앙 메인 서버]
-        Main["Main Server (중앙 제어 및 Re-ID 판정)<br>REST API (Port 8080) / Admin API (Port 8091)"]
-        DB[(SQLite WAL DB)]
-        Main <--> DB
-    end
-
-    subgraph Web_UI [웹 대시보드]
-        Web["Django / Daphne Web Dashboard<br>(Port 8000)"]
-    end
-
-    CamA -- "ENTRY / TIMING 발행" --> MQTT
-    MQTT -- "ENTRY 수신" --> Main
-    Main -- "CANDIDATE 발행" --> MQTT
-    MQTT -- "CANDIDATE 수신" --> CamB
-    MQTT -- "CANDIDATE 수신" --> CamC
-    CamB -- "PASSAGE 발행" --> MQTT
-    CamC -- "PASSAGE 발행" --> MQTT
-    MQTT -- "PASSAGE 수신" --> Main
-    Main -- "CANDIDATE (A+B/C) 발행" --> MQTT
-    MQTT -- "CANDIDATE 수신" --> CamD
-    CamD -- "ARRIVAL / STRANGER 발행" --> MQTT
-    MQTT -- "ARRIVAL 수신" --> Main
-    Main -- "REST API 폴링" --> Web
-    CamA -. "MJPEG 스트림" .-> Web
-    CamB -. "MJPEG 스트림" .-> Web
-    CamC -. "MJPEG 스트림" .-> Web
-    CamD -. "MJPEG 스트림" .-> Web
-```
-
+> **다이어그램 범례**: 실선은 제어·메타데이터 흐름, 점선은 실시간 MJPEG 영상 스트림을 의미합니다.
+>
+> **편집 원본**: [`system-architecture.drawio`](docs/diagrams/system-architecture.drawio)
+>
 > **참고**: Eclipse Mosquitto MQTT Broker는 메인 서버와 분리된 독립 네트워크 메시지 중계 서비스로 동작합니다.
 
 ---

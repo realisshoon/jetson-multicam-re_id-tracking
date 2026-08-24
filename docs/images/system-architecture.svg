@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="720" viewBox="0 0 1400 720" role="img" aria-labelledby="title desc">
+  <title id="title">Jetson Multi-Camera Re-ID 시스템 구조</title>
+  <desc id="desc">Jetson AI 엣지 노드가 MQTT 브로커와 중앙 서버를 거쳐 웹 대시보드로 연결되고, 카메라 영상은 MJPEG로 웹에 전달되는 구조</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#4285f4"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#f6a623"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#34a853"/>
+    </marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#6b7280"/>
+    </marker>
+    <style>
+      text { font-family: Inter, Pretendard, "Noto Sans KR", Arial, sans-serif; fill: #1f2937; }
+      .strong { font-weight: 700; }
+      .secondary { fill: #4b5563; }
+      .outline { stroke-width: 2; }
+      .node { fill: #ffffff; stroke: #cbd5e1; }
+      .flow { fill: none; stroke-width: 3; }
+    </style>
+  </defs>
+
+  <rect width="1400" height="720" rx="18" fill="#ffffff"/>
+  <text class="strong" x="28" y="40" font-size="26">Jetson Multi-Camera Re-ID System Architecture</text>
+  <text class="secondary" x="29" y="66" font-size="15">핵심 데이터 흐름 중심 간소화 구성</text>
+
+  <rect x="24" y="90" width="310" height="470" rx="18" fill="#f5f8ff" stroke="#4285f4" stroke-width="2"/>
+  <rect x="24" y="90" width="310" height="48" rx="18" fill="#e8f0fe"/>
+  <path d="M24 120V138H334V120" fill="#e8f0fe"/>
+  <text class="strong" x="48" y="121" font-size="21" fill="#174ea6">Jetson AI Edge Nodes</text>
+
+  <rect class="node outline" x="48" y="158" width="262" height="72" rx="13"/>
+  <text class="strong" x="68" y="187" font-size="18">Camera A · 진입</text>
+  <text class="secondary" x="68" y="212" font-size="15">ENTRY 생성 · Port 8000</text>
+
+  <rect class="node outline" x="48" y="248" width="262" height="72" rx="13"/>
+  <text class="strong" x="68" y="277" font-size="18">Camera B / C · 경유</text>
+  <text class="secondary" x="68" y="302" font-size="15">PASSAGE 생성 · 8001 / 8002</text>
+
+  <rect class="node outline" x="48" y="338" width="262" height="72" rx="13"/>
+  <text class="strong" x="68" y="367" font-size="18">Camera D · 도착</text>
+  <text class="secondary" x="68" y="392" font-size="15">ARRIVAL / STRANGER · 8003</text>
+
+  <rect x="48" y="430" width="262" height="98" rx="13" fill="#eef4ff" stroke="#b7cdf8" stroke-width="2" stroke-dasharray="6 5"/>
+  <text class="strong" x="179" y="459" text-anchor="middle" font-size="17">공통 AI 파이프라인</text>
+  <text class="secondary" x="179" y="484" text-anchor="middle" font-size="15">YOLO · ByteTrack · OSNet</text>
+  <text class="secondary" x="179" y="507" text-anchor="middle" font-size="14">A: YuNet/SFace · D: 미등록 감지</text>
+
+  <rect x="440" y="250" width="210" height="145" rx="18" fill="#fff4e5" stroke="#f6a623" stroke-width="2"/>
+  <text class="strong" x="545" y="294" text-anchor="middle" font-size="22" fill="#7a4b00">MQTT Broker</text>
+  <text x="545" y="326" text-anchor="middle" font-size="17" fill="#6b4f00">Eclipse Mosquitto</text>
+  <text x="545" y="354" text-anchor="middle" font-size="17" fill="#6b4f00">TCP 1883</text>
+
+  <rect x="765" y="135" width="300" height="380" rx="18" fill="#f6fdf8" stroke="#34a853" stroke-width="2"/>
+  <rect x="765" y="135" width="300" height="48" rx="18" fill="#eaf7ee"/>
+  <path d="M765 165V183H1065V165" fill="#eaf7ee"/>
+  <text class="strong" x="790" y="167" font-size="21" fill="#137333">Central Core</text>
+
+  <rect class="node outline" x="795" y="207" width="240" height="112" rx="13"/>
+  <text class="strong" x="915" y="242" text-anchor="middle" font-size="20">Main Server</text>
+  <text class="secondary" x="915" y="270" text-anchor="middle" font-size="15">중앙 제어 · Re-ID 판정</text>
+  <text class="secondary" x="915" y="296" text-anchor="middle" font-size="14">REST 8080 · Admin 8091</text>
+
+  <path d="M825 397C825 379 1005 379 1005 397V457C1005 475 825 475 825 457Z" fill="#f3f4f6" stroke="#6b7280" stroke-width="2"/>
+  <ellipse cx="915" cy="397" rx="90" ry="18" fill="#f9fafb" stroke="#6b7280" stroke-width="2"/>
+  <text class="strong" x="915" y="426" text-anchor="middle" font-size="18">SQLite WAL DB</text>
+  <text class="secondary" x="915" y="450" text-anchor="middle" font-size="13">Person · Journey · Event</text>
+
+  <rect x="1175" y="240" width="205" height="170" rx="18" fill="#f3e8ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text class="strong" x="1278" y="280" text-anchor="middle" font-size="21" fill="#4c1d95">Web Dashboard</text>
+  <text x="1278" y="311" text-anchor="middle" font-size="16" fill="#5b21b6">Django / Daphne</text>
+  <text x="1278" y="339" text-anchor="middle" font-size="15" fill="#5b21b6">Monitoring · Admin</text>
+  <text x="1278" y="366" text-anchor="middle" font-size="15" fill="#5b21b6">Port 8000</text>
+
+  <path class="flow" d="M334 322H440" stroke="#4285f4" marker-start="url(#arrow-blue)" marker-end="url(#arrow-blue)"/>
+  <rect x="347" y="274" width="80" height="39" rx="6" fill="#ffffff"/>
+  <text class="strong" x="387" y="291" text-anchor="middle" font-size="14" fill="#174ea6">Events ↔</text>
+  <text class="strong" x="387" y="307" text-anchor="middle" font-size="14" fill="#174ea6">Candidates</text>
+
+  <path class="flow" d="M650 322H765" stroke="#f6a623" marker-start="url(#arrow-orange)" marker-end="url(#arrow-orange)"/>
+  <rect x="669" y="274" width="77" height="39" rx="6" fill="#ffffff"/>
+  <text class="strong" x="708" y="291" text-anchor="middle" font-size="14" fill="#7a4b00">MQTT</text>
+  <text class="strong" x="708" y="307" text-anchor="middle" font-size="14" fill="#7a4b00">Pub / Sub</text>
+
+  <path class="flow" d="M1065 322H1175" stroke="#34a853" marker-end="url(#arrow-green)"/>
+  <rect x="1080" y="274" width="80" height="39" rx="6" fill="#ffffff"/>
+  <text class="strong" x="1120" y="291" text-anchor="middle" font-size="14" fill="#137333">REST API</text>
+  <text class="strong" x="1120" y="307" text-anchor="middle" font-size="14" fill="#137333">Polling</text>
+
+  <path d="M915 319V379" fill="none" stroke="#34a853" stroke-width="2" marker-start="url(#arrow-green)" marker-end="url(#arrow-green)"/>
+  <text class="secondary" x="928" y="354" font-size="13">R/W</text>
+
+  <path d="M179 560V635H1278V410" fill="none" stroke="#6b7280" stroke-width="2" stroke-dasharray="9 7" marker-end="url(#arrow-gray)"/>
+  <rect x="648" y="609" width="180" height="28" rx="6" fill="#ffffff"/>
+  <text class="strong" x="738" y="629" text-anchor="middle" font-size="15">MJPEG Video Streams</text>
+
+  <text class="secondary" x="24" y="690" font-size="14">실선: 제어·메타데이터 · 점선: 실시간 영상</text>
+  <text class="secondary" x="1376" y="690" text-anchor="end" font-size="14">Port 8000은 서로 다른 호스트(Camera A / Web)에서 사용</text>
+</svg>
